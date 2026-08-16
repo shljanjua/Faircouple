@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
+import { getFairnessCategories } from '@/lib/queries';
 import { getSessionUser, getCoupleContext, getEntitlements } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { buildReport, trendSeries } from '@/lib/fairness';
@@ -35,43 +36,27 @@ export default async function FairnessPage({
   }
 
   const period = searchParams.period ?? weekStart();
-  const supabase = createClient();
-
+  const coupleId = context.couple.id;
   const historyStart = addWeeks(period, -11);
 
-  const [{ data: categories }, { data: entries }, { data: history }, { data: responses }] =
-    await Promise.all([
-      supabase
-        .from('fairness_categories')
-        .select('*, criteria:fairness_criteria(*)')
-        .eq('is_active', true)
-        .order('sort_order'),
-      supabase
-        .from('fairness_entries')
-        .select('*')
-        .eq('couple_id', context.couple.id)
-        .eq('period', period),
-      supabase
-        .from('fairness_entries')
-        .select('*')
-        .eq('couple_id', context.couple.id)
-        .gte('period', historyStart)
-        .lte('period', period),
-      supabase
-        .from('fairness_criteria_responses')
-        .select('*, entry:fairness_entries!inner(user_id, category_id, period, couple_id)')
-        .eq('entry.couple_id', context.couple.id)
-        .eq('entry.period', period),
-    ]);
-
-  const categoryList = ((categories ?? []) as any[]).map((category) => ({
-    ...category,
-    criteria: (category.criteria ?? []).sort(
-      (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
+  const [categoryList, entryList, history, responses] = await Promise.all([
+    getFairnessCategories(),
+    query<FairnessEntry>(`SELECT * FROM fairness_entries WHERE couple_id = ? AND period = ?`, [
+      coupleId,
+      period,
+    ]),
+    query<FairnessEntry>(
+      `SELECT * FROM fairness_entries WHERE couple_id = ? AND period BETWEEN ? AND ?`,
+      [coupleId, historyStart, period]
     ),
-  })) as FairnessCategory[];
-
-  const entryList = (entries ?? []) as FairnessEntry[];
+    query<any>(
+      `SELECT r.*, e.user_id, e.category_id
+         FROM fairness_criteria_responses r
+         JOIN fairness_entries e ON e.id = r.entry_id
+        WHERE e.couple_id = ? AND e.period = ?`,
+      [coupleId, period]
+    ),
+  ]);
 
   const report = buildReport({
     period,
@@ -90,7 +75,7 @@ export default async function FairnessPage({
   });
 
   const trend = trendSeries(
-    (history ?? []) as FairnessEntry[],
+    history,
     context.me.user_id,
     context.partner?.user_id ?? null
   );
@@ -153,7 +138,7 @@ export default async function FairnessPage({
         period={period}
         categories={categoryList}
         entries={entryList}
-        responses={(responses ?? []) as any[]}
+        responses={responses}
         report={report}
         trend={trend}
         meId={context.me.user_id}

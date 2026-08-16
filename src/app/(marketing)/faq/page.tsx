@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
+import { getFaqs } from '@/lib/queries';
 import { buildMetadata, breadcrumbSchema, faqSchema } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
 import { Card, SectionHeading } from '@/components/ui';
@@ -26,14 +26,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 export default async function FaqPage() {
-  const supabase = createClient();
-  const { data: faqs } = await supabase
-    .from('faqs')
-    .select('*')
-    .eq('is_active', true)
-    .order('sort_order');
-
-  const list = (faqs ?? []) as any[];
+  const list = await getFaqs();
   const grouped = new Map<string, any[]>();
   for (const faq of list) {
     const key = faq.category ?? 'general';

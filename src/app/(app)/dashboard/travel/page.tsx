@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Plane } from 'lucide-react';
-import { createClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { getCoupleContext, getEntitlements } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { TripForm } from '@/components/app/trip-form';
@@ -28,22 +28,20 @@ export default async function TravelPage() {
     );
   }
 
-  const supabase = createClient();
-  const [{ data: trips }, { data: destinations }] = await Promise.all([
-    supabase
-      .from('trips')
-      .select('*, destination:destinations(name, slug, hero_image, country_code)')
-      .eq('couple_id', context.couple.id)
-      .order('start_date', { ascending: true, nullsFirst: false }),
-    supabase
-      .from('destinations')
-      .select('id, name, country_code, is_honeymoon')
-      .eq('is_active', true)
-      .order('popularity', { ascending: false })
-      .limit(200),
+  const [list, destinations] = await Promise.all([
+    query<any>(
+      `SELECT t.*, d.name AS destination_name, d.slug AS destination_slug,
+              d.hero_image AS destination_image
+         FROM trips t LEFT JOIN destinations d ON d.id = t.destination_id
+        WHERE t.couple_id = ?
+        ORDER BY t.start_date IS NULL ASC, t.start_date ASC`,
+      [context.couple.id]
+    ),
+    query<any>(
+      `SELECT id, name, country_code, is_honeymoon FROM destinations
+        WHERE is_active = 1 ORDER BY popularity DESC LIMIT 200`
+    ),
   ]);
-
-  const list = (trips ?? []) as any[];
 
   return (
     <div className="space-y-6">
@@ -56,7 +54,10 @@ export default async function TravelPage() {
 
       <div className="grid gap-5 lg:grid-cols-[1fr_1.5fr]">
         <TripForm
-          destinations={(destinations ?? []) as any[]}
+          destinations={destinations.map((destination) => ({
+            ...destination,
+            is_honeymoon: destination.is_honeymoon === 1,
+          }))}
           currency={context.couple.currency}
         />
 
@@ -78,10 +79,10 @@ export default async function TravelPage() {
               <Link key={trip.id} href={`/dashboard/travel/${trip.id}`} className="block">
                 <Card className="overflow-hidden transition-all hover:-translate-y-0.5 hover:shadow-md">
                   <div className="flex">
-                    {(trip.cover_image || trip.destination?.hero_image) && (
+                    {(trip.cover_image || trip.destination_image) && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
-                        src={`${trip.cover_image || trip.destination?.hero_image}?auto=format&fit=crop&w=400&q=60`}
+                        src={`${trip.cover_image || trip.destination_image}?auto=format&fit=crop&w=400&q=60`}
                         alt=""
                         className="hidden h-auto w-40 object-cover sm:block"
                       />
@@ -91,7 +92,7 @@ export default async function TravelPage() {
                         <div>
                           <h2 className="font-semibold">{trip.title}</h2>
                           <p className="text-sm text-muted-foreground">
-                            {trip.destination?.name ?? 'Destination to confirm'}
+                            {trip.destination_name ?? 'Destination to confirm'}
                           </p>
                         </div>
                         <Badge

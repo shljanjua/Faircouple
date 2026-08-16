@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { queryOne } from '@/lib/db';
 import { getSessionUser, getCoupleContext } from '@/lib/auth';
 import { getStripe, getGateway, createPaypalOrder } from '@/lib/payments';
 import { normalizeCurrency } from '@/lib/currency';
@@ -31,30 +31,31 @@ export async function POST(request: NextRequest) {
   const planSlug = body.planSlug;
   const provider = body.provider ?? 'stripe';
   const currency = normalizeCurrency(body.currency ?? user.profile.currency);
-  const interval = body.interval === 'year' || body.interval === 'lifetime' ? body.interval : 'month';
+  const interval =
+    body.interval === 'year' || body.interval === 'lifetime' ? body.interval : 'month';
 
   if (!planSlug) {
     return NextResponse.json({ error: 'Missing plan.' }, { status: 400 });
   }
 
-  const supabase = createClient();
-  const { data: plan } = await supabase
-    .from('plans')
-    .select('*, prices:plan_prices(*)')
-    .eq('slug', planSlug)
-    .eq('is_active', true)
-    .maybeSingle();
+  const plan = await queryOne<any>(
+    `SELECT * FROM plans WHERE slug = ? AND is_active = 1 LIMIT 1`,
+    [planSlug]
+  );
 
   if (!plan) {
     return NextResponse.json({ error: 'Plan not found.' }, { status: 404 });
   }
 
-  if ((plan as any).is_free) {
+  if (plan.is_free) {
     return NextResponse.json({ url: '/dashboard' });
   }
 
-  const price = ((plan as any).prices ?? []).find(
-    (row: any) => row.currency === currency && row.interval === interval && row.is_active
+  const price = await queryOne<any>(
+    `SELECT * FROM plan_prices
+      WHERE plan_id = ? AND currency = ? AND billing_interval = ? AND is_active = 1
+      LIMIT 1`,
+    [plan.id, currency, interval]
   );
 
   if (!price) {
@@ -81,17 +82,14 @@ export async function POST(request: NextRequest) {
     }
 
     try {
-      const admin = createAdminClient();
-      const { data: existing } = await admin
-        .from('subscriptions')
-        .select('provider_customer_id')
-        .eq('user_id', user.id)
-        .eq('provider', 'stripe')
-        .not('provider_customer_id', 'is', null)
-        .limit(1)
-        .maybeSingle();
+      const existing = await queryOne<{ provider_customer_id: string }>(
+        `SELECT provider_customer_id FROM subscriptions
+          WHERE user_id = ? AND provider = 'stripe' AND provider_customer_id IS NOT NULL
+          ORDER BY created_at DESC LIMIT 1`,
+        [user.id]
+      );
 
-      let customerId = (existing as any)?.provider_customer_id as string | undefined;
+      let customerId = existing?.provider_customer_id;
       if (!customerId) {
         const customer = await stripe.customers.create({
           email: user.email,
@@ -110,12 +108,10 @@ export async function POST(request: NextRequest) {
               currency: currency.toLowerCase(),
               unit_amount: price.amount_cents,
               product_data: {
-                name: `FairCouples ${(plan as any).name}`,
-                description: (plan as any).tagline ?? undefined,
+                name: `FairCouples ${plan.name}`,
+                description: plan.tagline ?? undefined,
               },
-              ...(isLifetime
-                ? {}
-                : { recurring: { interval: interval as 'month' | 'year' } }),
+              ...(isLifetime ? {} : { recurring: { interval: interval as 'month' | 'year' } }),
             },
           };
 
@@ -132,7 +128,7 @@ export async function POST(request: NextRequest) {
         metadata: {
           user_id: user.id,
           couple_id: context?.couple.id ?? '',
-          plan_id: (plan as any).id,
+          plan_id: plan.id,
           plan_slug: planSlug,
           price_id: price.id,
           interval,
@@ -142,13 +138,11 @@ export async function POST(request: NextRequest) {
           ? {}
           : {
               subscription_data: {
-                ...((plan as any).trial_days > 0
-                  ? { trial_period_days: (plan as any).trial_days }
-                  : {}),
+                ...(plan.trial_days > 0 ? { trial_period_days: plan.trial_days } : {}),
                 metadata: {
                   user_id: user.id,
                   couple_id: context?.couple.id ?? '',
-                  plan_id: (plan as any).id,
+                  plan_id: plan.id,
                   price_id: price.id,
                 },
               },
@@ -183,10 +177,10 @@ export async function POST(request: NextRequest) {
   const order = await createPaypalOrder({
     amountCents: price.amount_cents,
     currency,
-    description: `FairCouples ${(plan as any).name} — ${interval}`,
+    description: `FairCouples ${plan.name} — ${interval}`,
     returnUrl: `${SITE_URL}/api/checkout/paypal/capture?plan=${planSlug}&interval=${interval}&currency=${currency}`,
     cancelUrl,
-    referenceId: `${user.id}:${(plan as any).id}:${price.id}`,
+    referenceId: `${user.id}:${plan.id}:${price.id}`,
   });
 
   if (!order.ok) {

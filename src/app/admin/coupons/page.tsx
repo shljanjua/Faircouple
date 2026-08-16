@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { buildMetadata } from '@/lib/seo';
 import { deleteCouponAction, saveCouponAction } from '@/app/actions/admin';
 import { ActionButton, AdminForm } from '@/components/admin/form-shell';
@@ -14,11 +14,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AdminCouponsPage() {
-  const supabase = createAdminClient();
-  const { data: coupons } = await supabase
-    .from('coupons')
-    .select('*')
-    .order('created_at', { ascending: false });
+  const coupons = await query<any>(`SELECT * FROM coupons ORDER BY created_at DESC`);
 
   return (
     <div className="space-y-6">
@@ -96,7 +92,7 @@ export default async function AdminCouponsPage() {
           </tr>
         </thead>
         <tbody>
-          {((coupons ?? []) as any[]).map((coupon) => (
+          {coupons.map((coupon) => (
             <tr key={coupon.id}>
               <Td className="font-mono font-medium">{coupon.code}</Td>
               <Td>

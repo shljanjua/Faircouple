@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
-import { createAdminClient } from '@/lib/supabase/server';
+import { execute, uuid } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,26 +23,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Enter a valid email address.' }, { status: 400 });
   }
 
-  const country =
-    request.headers.get('x-vercel-ip-country') ?? request.headers.get('cf-ipcountry') ?? null;
+  const country = request.headers.get('cf-ipcountry') ?? null;
 
-  try {
-    const supabase = createAdminClient();
-    const { error } = await supabase.from('newsletter_subscribers').upsert(
-      {
-        email: parsed.data.email.toLowerCase(),
-        name: parsed.data.name ?? null,
-        source: parsed.data.source ?? 'footer',
-        country_code: country,
-        status: 'subscribed',
-      },
-      { onConflict: 'email' }
-    );
+  const result = await execute(
+    `INSERT INTO newsletter_subscribers (id, email, name, source, country_code, status)
+     VALUES (?, ?, ?, ?, ?, 'subscribed')
+     ON DUPLICATE KEY UPDATE
+       name            = COALESCE(VALUES(name), name),
+       source          = VALUES(source),
+       country_code    = COALESCE(VALUES(country_code), country_code),
+       status          = 'subscribed',
+       unsubscribed_at = NULL`,
+    [
+      uuid(),
+      parsed.data.email.toLowerCase(),
+      parsed.data.name ?? null,
+      parsed.data.source ?? 'footer',
+      country,
+    ]
+  );
 
-    if (error) throw new Error(error.message);
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Could not subscribe you.';
-    return NextResponse.json({ error: message }, { status: 500 });
+  if (!result.ok) {
+    return NextResponse.json({ error: result.error ?? 'Could not subscribe you.' }, { status: 500 });
   }
+
+  return NextResponse.json({ ok: true });
 }

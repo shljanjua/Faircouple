@@ -1,6 +1,6 @@
 import 'server-only';
 import { cache } from 'react';
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { query, execute, parseJson, nowSql } from '@/lib/db';
 import { DEFAULT_SETTINGS, type SettingsMap } from '@/lib/settings-utils';
 
 export {
@@ -11,53 +11,48 @@ export {
   type SettingsMap,
 } from '@/lib/settings-utils';
 
-/**
- * Public settings — safe for anonymous rendering. Cached per request.
- */
-export const getPublicSettings = cache(async (): Promise<SettingsMap> => {
-  try {
-    const supabase = createClient();
-    const { data, error } = await supabase.from('public_settings').select('key, value');
-    if (error || !data) return { ...DEFAULT_SETTINGS };
-    const map: SettingsMap = { ...DEFAULT_SETTINGS };
-    for (const row of data) map[row.key as string] = (row as any).value;
-    return map;
-  } catch {
-    return { ...DEFAULT_SETTINGS };
+function hydrate(rows: any[]): SettingsMap {
+  const map: SettingsMap = { ...DEFAULT_SETTINGS };
+  for (const row of rows) {
+    map[row.setting_key] = parseJson(row.value, row.value);
   }
+  return map;
+}
+
+/** Public settings — safe for anonymous rendering. Cached per request. */
+export const getPublicSettings = cache(async (): Promise<SettingsMap> => {
+  const rows = await query<any>(
+    `SELECT setting_key, value FROM site_settings WHERE is_public = 1 AND is_secret = 0`
+  );
+  return hydrate(rows);
 });
 
 /**
- * Every setting including secrets (SMTP, gateway keys). Server-only, and the
- * caller must already have verified the requester is an admin.
+ * Every setting including secrets (SMTP password, gateway keys). Server-only:
+ * the caller must already have verified the requester is an admin before
+ * putting any of this on screen.
  */
-export async function getAllSettings(): Promise<SettingsMap> {
-  try {
-    const supabase = createAdminClient();
-    const { data } = await supabase.from('site_settings').select('key, value');
-    const map: SettingsMap = { ...DEFAULT_SETTINGS };
-    for (const row of data ?? []) map[row.key as string] = (row as any).value;
-    return map;
-  } catch {
-    return { ...DEFAULT_SETTINGS };
-  }
-}
+export const getAllSettings = cache(async (): Promise<SettingsMap> => {
+  const rows = await query<any>(`SELECT setting_key, value FROM site_settings`);
+  return hydrate(rows);
+});
 
 export async function getSetting<T = any>(key: string, fallback?: T): Promise<T> {
-  const supabase = createAdminClient();
-  const { data } = await supabase.from('site_settings').select('value').eq('key', key).maybeSingle();
-  if (!data) return (fallback ?? DEFAULT_SETTINGS[key]) as T;
-  return (data as any).value as T;
+  const rows = await query<any>(`SELECT value FROM site_settings WHERE setting_key = ? LIMIT 1`, [
+    key,
+  ]);
+  if (!rows.length) return (fallback ?? DEFAULT_SETTINGS[key]) as T;
+  return parseJson(rows[0].value, fallback as T);
 }
 
 export async function setSettings(values: SettingsMap, updatedBy?: string) {
-  const supabase = createAdminClient();
-  const rows = Object.entries(values).map(([key, value]) => ({
-    key,
-    value,
-    updated_by: updatedBy ?? null,
-    updated_at: new Date().toISOString(),
-  }));
-  const { error } = await supabase.from('site_settings').upsert(rows, { onConflict: 'key' });
-  if (error) throw new Error(error.message);
+  for (const [key, value] of Object.entries(values)) {
+    const result = await execute(
+      `INSERT INTO site_settings (setting_key, value, updated_by, updated_at)
+       VALUES (?, CAST(? AS JSON), ?, ?)
+       ON DUPLICATE KEY UPDATE value = VALUES(value), updated_by = VALUES(updated_by), updated_at = VALUES(updated_at)`,
+      [key, JSON.stringify(value ?? null), updatedBy ?? null, nowSql()]
+    );
+    if (!result.ok) throw new Error(result.error ?? `Could not save ${key}`);
+  }
 }

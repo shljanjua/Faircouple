@@ -8,9 +8,11 @@ where effort, respect and loyalty are drifting apart. Around that sits everythin
 day to day: emotions, private messaging, fair money splitting, gifts, and full honeymoon/travel
 planning with an itinerary generator and a ticket vault.
 
-Built with **Next.js 14 (App Router) + TypeScript + Tailwind CSS + Supabase (PostgreSQL, Auth,
-Storage, Realtime)**, with **Stripe and PayPal** billing in five currencies and a complete admin
-panel.
+Built with **Next.js 14 (App Router) + TypeScript + Tailwind CSS**, on a **Hostinger MySQL 8.0**
+backend with its own session-cookie authentication and local file storage, plus **Stripe and
+PayPal** billing in five currencies and a complete admin panel.
+
+Live at **https://grey-opossum-178268.hostingersite.com** — database `u237845628_Faircouple`.
 
 ---
 
@@ -18,7 +20,7 @@ panel.
 
 1. [What is included](#what-is-included)
 2. [Quick start](#quick-start)
-3. [Database setup](#database-setup-supabase)
+3. [Database setup](#database-setup-hostinger-mysql)
 4. [Environment variables](#environment-variables)
 5. [Admin panel](#admin-panel)
 6. [Payments](#payments-stripe--paypal)
@@ -26,7 +28,7 @@ panel.
 8. [SEO](#seo)
 9. [Deployment](#deployment)
 10. [Scheduled jobs](#scheduled-jobs)
-11. [Hostinger MySQL](#hostinger-mysql)
+11. [Storage & files](#storage--files)
 12. [Project structure](#project-structure)
 13. [Security model](#security-model)
 
@@ -100,9 +102,12 @@ Inbox & subscribers · Settings & integrations · Audit log.
 git clone https://github.com/shljanjua/faircouple.git
 cd faircouple
 npm install
-cp .env.example .env.local     # then fill in the Supabase values
+cp .env.example .env.local     # then fill in the MySQL credentials + AUTH_SECRET
 npm run dev                    # http://localhost:3000
 ```
+
+Import `database/mysql/faircouples-mysql.sql` into your MySQL database before the first run — see
+[Database setup](#database-setup-hostinger-mysql).
 
 Scripts:
 
@@ -116,27 +121,50 @@ Scripts:
 
 ---
 
-## Database setup (Supabase)
+## Database setup (Hostinger MySQL)
 
-1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor** and run these files **in order** — paste the contents of each and press Run:
+Everything lives in **one file**: `database/mysql/faircouples-mysql.sql`. It contains the complete
+MySQL 8.0 schema *and* all reference data, and it is safe to re-import.
 
-   | Order | File | What it creates |
-   | --- | --- | --- |
-   | 1 | `supabase/migrations/0001_schema.sql` | 50+ tables, functions, triggers, indexes |
-   | 2 | `supabase/migrations/0002_rls.sql` | Row Level Security on every table |
-   | 3 | `supabase/migrations/0003_seed.sql` | Fairness framework, emotions, plans & prices, 45 countries, 50+ destinations, attractions, 15 checklist templates, blog posts, legal pages, FAQs, email templates, settings |
-   | 4 | `supabase/migrations/0004_storage.sql` | Storage buckets + object policies |
-   | 5 | `supabase/migrations/0005_admin_bootstrap.sql` | Promotes your account to superadmin — **edit the email first**, and run it after you have signed up |
+1. **hPanel → Databases → MySQL Databases** — confirm the database and user exist:
 
-3. **Authentication → URL Configuration**
-   - Site URL: `https://your-domain.com`
-   - Redirect URLs: `https://your-domain.com/auth/callback`, `http://localhost:3000/auth/callback`
-4. **Authentication → Providers → Email**: enable “Confirm email”.
-5. Copy the project URL and both API keys into your environment.
+   | | |
+   | --- | --- |
+   | Database | `u237845628_Faircouple` |
+   | User | `u237845628_Faircouple` |
+   | Password | whatever you set in hPanel — it goes in `MYSQL_PASSWORD` |
 
-> The app never queries with the service-role key from the browser. Every user-facing query runs
-> under RLS with the anon key.
+2. **hPanel → Databases → phpMyAdmin** — open the database, go to **Import**, choose
+   `database/mysql/faircouples-mysql.sql`, press **Go**. (Pasting it into the SQL tab works too.)
+
+   What it creates:
+
+   | Section | Contents |
+   | --- | --- |
+   | Schema | 50+ tables with foreign keys and indexes, plus `sessions` and `auth_tokens` for login |
+   | Fairness | The 10 areas, their 30 behaviours and each area's fair rule |
+   | Emotions | 30 emotions across positive / neutral / difficult |
+   | Billing | 4 plans with their limits, and prices in USD, GBP, EUR, CAD and AUD |
+   | Travel | 45 countries, 54 destinations, attractions for the itinerary generator |
+   | Checklists | 14 packing, travel and relationship templates |
+   | Content | 8 legal and marketing pages, 6 blog posts, 14 FAQs, 6 testimonials |
+   | Platform | 65 settings, 10 email templates, SEO metadata, feature flags |
+
+3. Put the same credentials in your environment as `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_DATABASE`,
+   `MYSQL_USER` and `MYSQL_PASSWORD`.
+
+4. If the Node server runs **outside** Hostinger, switch on **hPanel → Databases → Remote MySQL**
+   for that server's IP address and use the hostname hPanel shows you.
+
+5. Sign up in the app, then run the last statement in the SQL file with your own email to make
+   yourself superadmin:
+   ```sql
+   UPDATE profiles SET role = 'superadmin' WHERE email = 'you@example.com';
+   ```
+
+> MySQL has no Row Level Security. Every couple-scoped query in the application is explicitly
+> filtered by `couple_id` / `user_id` in `src/lib/auth.ts` and the server actions, and uploads are
+> checked for membership before a file is served.
 
 ---
 
@@ -147,9 +175,14 @@ Copy `.env.example` to `.env.local` (and set the same values in your host):
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `NEXT_PUBLIC_SITE_URL` | yes | Canonicals, sitemap, OG tags, checkout redirects |
-| `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase → Settings → API |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Public key, RLS-protected |
-| `SUPABASE_SERVICE_ROLE_KEY` | yes | Server-only: webhooks, admin actions. Never expose it |
+| `MYSQL_HOST` / `MYSQL_PORT` | yes | `localhost` on Hostinger, or the Remote MySQL hostname |
+| `MYSQL_DATABASE` | yes | `u237845628_Faircouple` |
+| `MYSQL_USER` | yes | `u237845628_Faircouple` |
+| `MYSQL_PASSWORD` | yes | Set in hPanel → Databases |
+| `MYSQL_POOL_SIZE` | optional | Default 8 — keep it low on shared MySQL |
+| `AUTH_SECRET` | yes | Signs the session cookie. `openssl rand -hex 32` |
+| `UPLOAD_DIR` | yes | Absolute path for photos and booking documents |
+| `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` | optional | Or set them in Admin → Emails |
 | `STRIPE_SECRET_KEY` | optional | Can be set in Admin → Payments instead |
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | optional | " |
 | `STRIPE_WEBHOOK_SECRET` | optional | " |
@@ -165,7 +198,10 @@ rotate keys without a redeploy.
 ## Admin panel
 
 1. Sign up through the app with the email you want as admin.
-2. Edit the email in `supabase/migrations/0005_admin_bootstrap.sql` and run it.
+2. In phpMyAdmin, run:
+   ```sql
+   UPDATE profiles SET role = 'superadmin' WHERE email = 'you@example.com';
+   ```
 3. Visit `/admin`.
 
 The dashboard opens with a **setup checklist** that tells you exactly what is still unconfigured
@@ -255,11 +291,18 @@ guides, packing checklists, the fairness framework, and the Love vs Attraction t
 
 ## Deployment
 
-### Vercel (recommended)
-1. Import the GitHub repository.
-2. Add the environment variables.
-3. Add repository secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` — pushes to `main`
-   then deploy automatically via `.github/workflows/deploy.yml`.
+> **Read this first.** Hostinger's *shared* hosting — which is what a `*.hostingersite.com`
+> temporary domain points at — runs PHP on LiteSpeed and **cannot execute a Next.js server**. There
+> is no configuration that makes it work. You need Node 20 somewhere, and there are two supported
+> ways to get it while keeping `grey-opossum-178268.hostingersite.com` as the address:
+>
+> 1. **Hostinger VPS** (the straightforward option). Run the app there and point the domain at it
+>    in hPanel.
+> 2. **Any other Node host** (Vercel, Render, Fly, a droplet). Point the domain at it with a CNAME,
+>    and switch on **hPanel → Databases → Remote MySQL** for that host's IP so the app can still
+>    reach `u237845628_Faircouple`.
+>
+> The database, mailboxes and DNS stay in hPanel either way.
 
 ### Hostinger VPS / any Node host
 ```bash
@@ -273,8 +316,26 @@ pm2 start "npm start" --name faircouples
 pm2 save
 ```
 
-> Hostinger's *shared* hosting cannot run Next.js server rendering (it is PHP-only). Use a
-> Hostinger VPS, or host the app on Vercel and keep your domain and mailboxes at Hostinger.
+Create `UPLOAD_DIR` once and make it writable by the Node process — it holds every photo and
+uploaded ticket:
+```bash
+mkdir -p /home/u237845628/faircouples-uploads
+chown -R $USER /home/u237845628/faircouples-uploads
+```
+
+### Automated deploys
+
+`.github/workflows/deploy.yml` builds on every push to `main`, then rsyncs the build to your server
+and reloads PM2. Add these repository secrets to switch the upload on (without them the workflow
+still builds and type-checks, and simply skips the upload):
+
+| Secret | Example |
+| --- | --- |
+| `SSH_HOST` | `123.45.67.89` |
+| `SSH_USER` | `root` |
+| `SSH_KEY` | Private key with access to the server |
+| `SSH_PORT` | `22` (optional) |
+| `SSH_PATH` | `/var/www/faircouples` (optional) |
 
 CI runs typecheck, lint and build on every push (`.github/workflows/ci.yml`).
 
@@ -288,19 +349,33 @@ CI runs typecheck, lint and build on every push (`.github/workflows/ci.yml`).
 - `weekly-reports` — Monday fairness report to both partners
 - `expire-invites` — marks stale invitations expired
 
-`.github/workflows/cron.yml` calls it daily at 08:00 UTC and weekly on Mondays. Vercel Cron or a
-Hostinger cron job calling the same URL works identically.
+- `purge-tokens` — clears expired sessions and one-time auth tokens
+
+`.github/workflows/cron.yml` calls it daily at 08:00 UTC and weekly on Mondays. A Hostinger cron
+job calling the same URL works identically:
+
+```
+0 8 * * *  curl -sS -H "Authorization: Bearer $CRON_SECRET" \
+  "https://grey-opossum-178268.hostingersite.com/api/cron?job=all"
+```
 
 ---
 
-## Hostinger MySQL
+## Storage & files
 
-The application runs on Supabase (PostgreSQL). If you also want the schema in Hostinger's MySQL —
-for reporting, a replica, or a future migration — `database/mysql/faircouples-mysql.sql` is a
-complete MySQL 8.0 translation with the fairness framework, plans and pricing seeded.
+Photos, chat images, avatars and uploaded booking documents are written to disk under `UPLOAD_DIR`,
+outside the web root, in `<bucket>/<couple_id>/<user_id>/<file>`.
 
-Import it through **hPanel → Databases → phpMyAdmin → Import**. Note that MySQL has no Row Level
-Security, so any application built on it must scope every query by `couple_id` / `user_id` itself.
+- `POST /api/upload` accepts one file per request. It builds the object path from the **session**,
+  never from anything the browser sends, and checks the plan's storage quota before writing.
+- `GET /api/files/<bucket>/<path>` streams a file back. For `couple-media` and `documents` it
+  first confirms the caller is a live member of the couple whose id is in the path (or a platform
+  admin). `avatars`, `blog` and `site` are public.
+- Path traversal is rejected in `src/lib/storage.ts`; every resolved path must sit inside the
+  upload root.
+
+Back up `UPLOAD_DIR` alongside the database — the rows in `media_assets` and `travel_documents`
+point at these files.
 
 ---
 
@@ -317,18 +392,18 @@ src/
 │   │                      checklists, messages, gallery, gifts, budget, travel,
 │   │                      documents, partner, billing, settings, checkout
 │   ├── admin/             Full admin panel
-│   ├── api/               Checkout, webhooks, contact, newsletter, cron
-│   ├── actions/           Server actions (couple, fairness, entries, money,
-│   │                      travel, vault, account, billing, admin)
-│   ├── auth/callback/     Supabase redirect handler
+│   ├── api/               Checkout, webhooks, upload, files, contact,
+│   │                      newsletter, cron
+│   ├── actions/           Server actions (auth, couple, join, fairness, entries,
+│   │                      money, travel, vault, account, assessment, billing, admin)
 │   ├── og/                Dynamic OpenGraph image
 │   ├── sitemap.ts robots.ts
 ├── components/            ui/ · marketing/ · app/ · admin/ · analytics · providers
-├── lib/                   supabase/ · auth · fairness · assessment · itinerary ·
-│                          payments · email · settings · seo · currency · plans · utils
+├── lib/                   db · session · auth · storage · queries · fairness ·
+│                          assessment · itinerary · payments · email · settings ·
+│                          seo · currency · plans · utils
 └── types/
-supabase/migrations/       0001 schema · 0002 RLS · 0003 seed · 0004 storage · 0005 admin
-database/mysql/            MySQL 8.0 translation for Hostinger
+database/mysql/            faircouples-mysql.sql — schema + all seed data
 .github/workflows/         ci · deploy · cron
 ```
 
@@ -336,12 +411,17 @@ database/mysql/            MySQL 8.0 translation for Hostinger
 
 ## Security model
 
-- **Row Level Security on every table.** A couple's data is reachable only by its two members and
-  by platform admins. Private entries are visible only to their author, and still count in that
-  author's own trends.
-- **Storage isolation** — private files live under `<couple_id>/<user_id>/…` and are served through
-  short-lived signed URLs. A storage policy checks membership on every read and write.
-- **Service-role key is server-only** and used exclusively by webhooks and verified admin actions.
+- **Every couple-scoped query is filtered by `couple_id` in application code.** MySQL has no Row
+  Level Security, so the server actions and `src/lib/auth.ts` carry that responsibility: a couple's
+  data is reachable only by its two live members and by platform admins. Private entries are
+  visible only to their author, and still count in that author's own trends.
+- **Passwords are bcrypt hashes** (12 rounds). Sessions are HS256 JWT cookies (httpOnly, SameSite
+  Lax, Secure in production) whose `sid` claim points at a row in `sessions`, so changing a
+  password, suspending an account or deleting it revokes every device immediately.
+- **One-time tokens are stored as SHA-256 hashes**, so a database leak cannot be replayed as a live
+  verification or reset link.
+- **Storage isolation** — private files live under `<couple_id>/<user_id>/…` outside the web root
+  and are served only through `/api/files`, which checks couple membership on every read.
 - **Webhooks verify signatures** (Stripe signing secret, PayPal verify-webhook-signature) and are
   idempotent.
 - **Payment details never touch our servers** — Stripe and PayPal hold them.

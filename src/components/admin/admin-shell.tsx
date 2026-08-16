@@ -23,7 +23,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import { getBrowserClient } from '@/lib/supabase/client';
+import { signOutAction } from '@/app/actions/auth';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Avatar, Badge } from '@/components/ui';
 import { cn } from '@/lib/utils';
@@ -146,8 +146,9 @@ export function AdminShell({
             type="button"
             aria-label="Sign out"
             onClick={async () => {
-              await getBrowserClient().auth.signOut();
+              await signOutAction();
               router.push('/signin');
+              router.refresh();
             }}
             className="rounded-md p-2 text-muted-foreground hover:bg-secondary"
           >

@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query, parseJson } from '@/lib/db';
 import { buildMetadata, SITE_URL } from '@/lib/seo';
 import { deleteRedirectAction, saveRedirectAction, saveSeoMetaAction } from '@/app/actions/admin';
 import { ActionButton, AdminForm } from '@/components/admin/form-shell';
@@ -13,14 +13,22 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AdminSeoPage() {
-  const supabase = createAdminClient();
-  const [{ data: metas }, { data: redirects }, { data: posts }, { data: destinations }] =
-    await Promise.all([
-      supabase.from('seo_meta').select('*').order('path'),
-      supabase.from('redirects').select('*').order('created_at', { ascending: false }),
-      supabase.from('blog_posts').select('id', { count: 'exact', head: false }).eq('status', 'published'),
-      supabase.from('destinations').select('id', { count: 'exact', head: false }).eq('is_active', true),
-    ]);
+  const [metaRows, redirects, counts] = await Promise.all([
+    query<any>(`SELECT * FROM seo_meta ORDER BY path ASC`),
+    query<any>(`SELECT * FROM redirects ORDER BY created_at DESC`),
+    query<{ metric: string; total: number }>(
+      `SELECT 'posts' AS metric, COUNT(*) AS total FROM blog_posts WHERE status = 'published'
+       UNION ALL SELECT 'destinations', COUNT(*) FROM destinations WHERE is_active = 1`
+    ),
+  ]);
+
+  const metas = metaRows.map((meta) => ({
+    ...meta,
+    keywords: parseJson<string[]>(meta.keywords, []),
+  }));
+
+  const countOf = (metric: string) =>
+    Number(counts.find((row) => row.metric === metric)?.total ?? 0);
 
   return (
     <div className="space-y-6">
@@ -35,7 +43,7 @@ export default async function AdminSeoPage() {
         <ul className="mt-2 space-y-1 text-sm">
           <li>
             Sitemap index: <code>{SITE_URL}/sitemap.xml</code> — includes pages, blog posts (
-            {(posts ?? []).length}), destinations ({(destinations ?? []).length}) and countries.
+            {countOf('posts')}), destinations ({countOf('destinations')}) and countries.
           </li>
           <li>
             Robots: <code>{SITE_URL}/robots.txt</code> — blocks /admin, /dashboard and /api.
@@ -109,7 +117,7 @@ export default async function AdminSeoPage() {
               </tr>
             </thead>
             <tbody>
-              {((metas ?? []) as any[]).map((meta) => (
+              {metas.map((meta) => (
                 <tr key={meta.id}>
                   <Td className="font-mono text-xs">{meta.path}</Td>
                   <Td className="max-w-md truncate">{meta.title ?? '—'}</Td>
@@ -164,7 +172,7 @@ export default async function AdminSeoPage() {
               </tr>
             </thead>
             <tbody>
-              {((redirects ?? []) as any[]).map((redirect) => (
+              {redirects.map((redirect) => (
                 <tr key={redirect.id}>
                   <Td className="font-mono text-xs">{redirect.source}</Td>
                   <Td className="font-mono text-xs">{redirect.destination}</Td>

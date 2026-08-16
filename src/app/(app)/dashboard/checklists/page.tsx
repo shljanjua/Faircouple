@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import { createClient } from '@/lib/supabase/server';
+import { query, toBool } from '@/lib/db';
+import { getChecklistTemplates } from '@/lib/queries';
 import { getCoupleContext } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { ChecklistsWorkspace } from '@/components/app/checklists-workspace';
@@ -23,31 +24,32 @@ export default async function ChecklistsPage() {
     );
   }
 
-  const supabase = createClient();
-
-  const [{ data: checklists }, { data: templates }] = await Promise.all([
-    supabase
-      .from('checklists')
-      .select('*, items:checklist_items(*)')
-      .eq('couple_id', context.couple.id)
-      .is('archived_at', null)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('checklist_templates')
-      .select('*')
-      .eq('is_public', true)
-      .order('sort_order'),
+  const [checklists, items, templates] = await Promise.all([
+    query<any>(
+      `SELECT * FROM checklists WHERE couple_id = ? AND archived_at IS NULL ORDER BY created_at DESC`,
+      [context.couple.id]
+    ),
+    query<any>(
+      `SELECT i.* FROM checklist_items i
+         JOIN checklists c ON c.id = i.checklist_id
+        WHERE c.couple_id = ? AND c.archived_at IS NULL
+        ORDER BY i.sort_order ASC`,
+      [context.couple.id]
+    ),
+    getChecklistTemplates(),
   ]);
 
-  const lists = ((checklists ?? []) as any[]).map((list) => ({
+  const lists = checklists.map((list) => ({
     ...list,
-    items: (list.items ?? []).sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)),
+    items: items
+      .filter((item) => item.checklist_id === list.id)
+      .map((item) => ({ ...item, is_done: toBool(item.is_done) })),
   }));
 
   return (
     <ChecklistsWorkspace
       checklists={lists}
-      templates={(templates ?? []) as any[]}
+      templates={templates}
       members={context.members.map((member) => ({
         id: member.user_id,
         name: member.profile?.full_name ?? 'Member',

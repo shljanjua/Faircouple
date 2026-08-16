@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createClient } from '@/lib/supabase/server';
+import { execute, query, queryOne, uuid, nowSql } from '@/lib/db';
 import { getSessionUser, getCoupleContext } from '@/lib/auth';
 import { notifyUser } from '@/lib/audit';
 import { sendEmail } from '@/lib/email';
@@ -11,7 +11,9 @@ import type { ActionResult } from '@/app/actions/couple';
 
 /**
  * Saves one member's entry for a single fairness category and period.
- * Each partner writes only their own row — enforced by RLS as well as here.
+ * Each partner writes only their own row — every statement is scoped to
+ * both the couple and the signed-in user, since MySQL has no row-level
+ * security to fall back on.
  */
 export async function saveFairnessEntryAction(formData: FormData): Promise<ActionResult> {
   const user = await getSessionUser();
@@ -30,56 +32,78 @@ export async function saveFairnessEntryAction(formData: FormData): Promise<Actio
     return Number.isFinite(value) ? value : null;
   };
 
-  const supabase = createClient();
+  const isPrivate = formData.get('is_private') === 'on' || formData.get('is_private') === 'true';
 
-  const payload = {
-    couple_id: context.couple.id,
-    user_id: user.id,
-    about_user_id: context.partner?.user_id ?? null,
-    category_id: categoryId,
-    period,
-    self_score: num('self_score'),
-    partner_score: num('partner_score'),
-    effort_self: num('effort_self'),
-    effort_partner: num('effort_partner'),
-    respect_score: num('respect_score'),
-    loyalty_score: num('loyalty_score'),
-    satisfaction: num('satisfaction'),
-    note: String(formData.get('note') ?? '').trim() || null,
-    partner_note: String(formData.get('partner_note') ?? '').trim() || null,
-    is_private: formData.get('is_private') === 'on' || formData.get('is_private') === 'true',
-    updated_at: new Date().toISOString(),
-  };
+  const saved = await execute(
+    `INSERT INTO fairness_entries
+       (id, couple_id, user_id, about_user_id, category_id, period,
+        self_score, partner_score, effort_self, effort_partner,
+        respect_score, loyalty_score, satisfaction, note, partner_note, is_private)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       about_user_id  = VALUES(about_user_id),
+       self_score     = VALUES(self_score),
+       partner_score  = VALUES(partner_score),
+       effort_self    = VALUES(effort_self),
+       effort_partner = VALUES(effort_partner),
+       respect_score  = VALUES(respect_score),
+       loyalty_score  = VALUES(loyalty_score),
+       satisfaction   = VALUES(satisfaction),
+       note           = VALUES(note),
+       partner_note   = VALUES(partner_note),
+       is_private     = VALUES(is_private),
+       updated_at     = CURRENT_TIMESTAMP`,
+    [
+      uuid(),
+      context.couple.id,
+      user.id,
+      context.partner?.user_id ?? null,
+      categoryId,
+      period,
+      num('self_score'),
+      num('partner_score'),
+      num('effort_self'),
+      num('effort_partner'),
+      num('respect_score'),
+      num('loyalty_score'),
+      num('satisfaction'),
+      String(formData.get('note') ?? '').trim() || null,
+      String(formData.get('partner_note') ?? '').trim() || null,
+      isPrivate,
+    ]
+  );
 
-  const { data, error } = await supabase
-    .from('fairness_entries')
-    .upsert(payload, { onConflict: 'couple_id,user_id,category_id,period' })
-    .select('id')
-    .single();
+  if (!saved.ok) return { ok: false, error: saved.error ?? 'Could not save your entry.' };
 
-  if (error) return { ok: false, error: error.message };
+  const entry = await queryOne<{ id: string }>(
+    `SELECT id FROM fairness_entries
+      WHERE couple_id = ? AND user_id = ? AND category_id = ? AND period = ? LIMIT 1`,
+    [context.couple.id, user.id, categoryId, period]
+  );
 
   // Persist per-criterion answers (0–4 scale) submitted alongside the entry.
-  const criterionResponses: any[] = [];
-  formData.forEach((value, key) => {
-    const match = /^criterion:(.+):(self|partner)$/.exec(key);
-    if (!match || value === '') return;
-    const [, criterionId, side] = match;
-    let row = criterionResponses.find((r) => r.criterion_id === criterionId);
-    if (!row) {
-      row = { entry_id: (data as any).id, criterion_id: criterionId };
-      criterionResponses.push(row);
-    }
-    row[side === 'self' ? 'self_value' : 'partner_value'] = Number(value);
-  });
+  if (entry) {
+    const responses = new Map<string, { self: number | null; partner: number | null }>();
+    formData.forEach((value, key) => {
+      const match = /^criterion:(.+):(self|partner)$/.exec(key);
+      if (!match || value === '') return;
+      const [, criterionId, side] = match;
+      const row = responses.get(criterionId) ?? { self: null, partner: null };
+      row[side === 'self' ? 'self' : 'partner'] = Number(value);
+      responses.set(criterionId, row);
+    });
 
-  if (criterionResponses.length) {
-    await supabase
-      .from('fairness_criteria_responses')
-      .upsert(criterionResponses, { onConflict: 'entry_id,criterion_id' });
+    for (const [criterionId, values] of responses) {
+      await execute(
+        `INSERT INTO fairness_criteria_responses (id, entry_id, criterion_id, self_value, partner_value)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE self_value = VALUES(self_value), partner_value = VALUES(partner_value)`,
+        [uuid(), entry.id, criterionId, values.self, values.partner]
+      );
+    }
   }
 
-  if (context.partner && !payload.is_private) {
+  if (context.partner && !isPrivate) {
     await notifyUser({
       userId: context.partner.user_id,
       coupleId: context.couple.id,
@@ -103,46 +127,55 @@ export async function saveWeeklyFairnessAction(formData: FormData): Promise<Acti
   if (!user || !context) return { ok: false, error: 'Create your relationship space first.' };
 
   const period = String(formData.get('period') ?? weekStart());
-  const supabase = createClient();
 
-  const { data: categories } = await supabase
-    .from('fairness_categories')
-    .select('id')
-    .eq('is_active', true);
+  const categories = await query<{ id: string }>(
+    `SELECT id FROM fairness_categories WHERE is_active = 1`
+  );
 
-  const rows = (categories ?? [])
-    .map((category: any) => {
-      const self = formData.get(`self:${category.id}`);
-      const partner = formData.get(`partner:${category.id}`);
-      if (self === null && partner === null) return null;
-      const selfScore = self === null || self === '' ? null : Number(self);
-      const partnerScore = partner === null || partner === '' ? null : Number(partner);
-      if (selfScore === null && partnerScore === null) return null;
-      return {
-        couple_id: context.couple.id,
-        user_id: user.id,
-        about_user_id: context.partner?.user_id ?? null,
-        category_id: category.id,
+  let written = 0;
+
+  for (const category of categories) {
+    const self = formData.get(`self:${category.id}`);
+    const partner = formData.get(`partner:${category.id}`);
+    const selfScore = self === null || self === '' ? null : Number(self);
+    const partnerScore = partner === null || partner === '' ? null : Number(partner);
+    if (selfScore === null && partnerScore === null) continue;
+
+    const result = await execute(
+      `INSERT INTO fairness_entries
+         (id, couple_id, user_id, about_user_id, category_id, period,
+          self_score, partner_score, effort_self, effort_partner, note)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         about_user_id  = VALUES(about_user_id),
+         self_score     = VALUES(self_score),
+         partner_score  = VALUES(partner_score),
+         effort_self    = VALUES(effort_self),
+         effort_partner = VALUES(effort_partner),
+         note           = VALUES(note),
+         updated_at     = CURRENT_TIMESTAMP`,
+      [
+        uuid(),
+        context.couple.id,
+        user.id,
+        context.partner?.user_id ?? null,
+        category.id,
         period,
-        self_score: selfScore,
-        partner_score: partnerScore,
-        effort_self: selfScore === null ? null : selfScore * 10,
-        effort_partner: partnerScore === null ? null : partnerScore * 10,
-        note: String(formData.get(`note:${category.id}`) ?? '').trim() || null,
-        updated_at: new Date().toISOString(),
-      };
-    })
-    .filter(Boolean);
+        selfScore,
+        partnerScore,
+        selfScore === null ? null : Math.min(100, selfScore * 10),
+        partnerScore === null ? null : Math.min(100, partnerScore * 10),
+        String(formData.get(`note:${category.id}`) ?? '').trim() || null,
+      ]
+    );
 
-  if (!rows.length) return { ok: false, error: 'Nothing to save yet.' };
+    if (!result.ok) return { ok: false, error: result.error ?? 'Could not save your week.' };
+    written += 1;
+  }
 
-  const { error } = await supabase
-    .from('fairness_entries')
-    .upsert(rows as any[], { onConflict: 'couple_id,user_id,category_id,period' });
+  if (!written) return { ok: false, error: 'Nothing to save yet.' };
 
-  if (error) return { ok: false, error: error.message };
-
-  if (context.partner?.profile?.email) {
+  if (context.partner) {
     await notifyUser({
       userId: context.partner.user_id,
       coupleId: context.couple.id,
@@ -176,28 +209,42 @@ export async function snapshotReportAction(payload: {
   const context = await getCoupleContext();
   if (!context) return { ok: false, error: 'No relationship space.' };
 
-  const supabase = createClient();
-  const { error } = await supabase.from('fairness_reports').upsert(
-    {
-      couple_id: context.couple.id,
-      period: payload.period,
-      period_type: 'week',
-      overall_score: payload.overallScore,
-      balance_index: payload.balanceIndex,
-      effort_a: payload.effortA,
-      effort_b: payload.effortB,
-      respect_delta: payload.respectDelta,
-      loyalty_delta: payload.loyaltyDelta,
-      verdict: payload.verdict,
-      risk_level: payload.riskLevel,
-      breakdown: payload.breakdown as any,
-      insights: payload.insights as any,
-      generated_at: new Date().toISOString(),
-    },
-    { onConflict: 'couple_id,period,period_type' }
+  const result = await execute(
+    `INSERT INTO fairness_reports
+       (id, couple_id, period, period_type, overall_score, balance_index, effort_a, effort_b,
+        respect_delta, loyalty_delta, verdict, risk_level, breakdown, insights, generated_at)
+     VALUES (?, ?, ?, 'week', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       overall_score = VALUES(overall_score),
+       balance_index = VALUES(balance_index),
+       effort_a      = VALUES(effort_a),
+       effort_b      = VALUES(effort_b),
+       respect_delta = VALUES(respect_delta),
+       loyalty_delta = VALUES(loyalty_delta),
+       verdict       = VALUES(verdict),
+       risk_level    = VALUES(risk_level),
+       breakdown     = VALUES(breakdown),
+       insights      = VALUES(insights),
+       generated_at  = VALUES(generated_at)`,
+    [
+      uuid(),
+      context.couple.id,
+      payload.period,
+      payload.overallScore,
+      payload.balanceIndex,
+      payload.effortA,
+      payload.effortB,
+      payload.respectDelta,
+      payload.loyaltyDelta,
+      payload.verdict,
+      payload.riskLevel,
+      JSON.stringify(payload.breakdown ?? null),
+      JSON.stringify(payload.insights ?? null),
+      nowSql(),
+    ]
   );
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not store the snapshot.' };
   return { ok: true };
 }
 
@@ -206,18 +253,15 @@ export async function emailWeeklyReportAction(period: string): Promise<ActionRes
   const context = await getCoupleContext();
   if (!user || !context) return { ok: false, error: 'No relationship space.' };
 
-  const supabase = createClient();
-  const { data: report } = await supabase
-    .from('fairness_reports')
-    .select('*')
-    .eq('couple_id', context.couple.id)
-    .eq('period', period)
-    .maybeSingle();
+  const report = await queryOne<any>(
+    `SELECT * FROM fairness_reports WHERE couple_id = ? AND period = ? LIMIT 1`,
+    [context.couple.id, period]
+  );
 
   if (!report) return { ok: false, error: 'Generate the report first.' };
 
   const recipients = context.members
-    .map((m) => m.profile?.email)
+    .map((member) => member.profile?.email)
     .filter((email): email is string => Boolean(email));
 
   for (const email of recipients) {
@@ -227,9 +271,9 @@ export async function emailWeeklyReportAction(period: string): Promise<ActionRes
       variables: {
         name: user.profile.full_name ?? 'there',
         partner_name: context.partner?.profile?.full_name ?? 'your partner',
-        balance_index: Math.round(Number((report as any).balance_index ?? 0)),
-        overall_score: Math.round(Number((report as any).overall_score ?? 0)),
-        verdict: (report as any).verdict ?? '',
+        balance_index: Math.round(Number(report.balance_index ?? 0)),
+        overall_score: Math.round(Number(report.overall_score ?? 0)),
+        verdict: report.verdict ?? '',
         report_url: `${SITE_URL}/dashboard/fairness`,
       },
     });

@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { getAllSettings } from '@/lib/settings';
 import { buildMetadata } from '@/lib/seo';
 import { EmailsManager } from '@/components/admin/emails-manager';
@@ -11,14 +11,9 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AdminEmailsPage() {
-  const supabase = createAdminClient();
-  const [{ data: templates }, { data: logs }, settings] = await Promise.all([
-    supabase.from('email_templates').select('*').order('slug'),
-    supabase
-      .from('email_logs')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(50),
+  const [templates, logs, settings] = await Promise.all([
+    query<any>(`SELECT * FROM email_templates ORDER BY slug ASC`),
+    query<any>(`SELECT * FROM email_logs ORDER BY created_at DESC LIMIT 50`),
     getAllSettings(),
   ]);
 
@@ -37,10 +32,6 @@ export default async function AdminEmailsPage() {
   };
 
   return (
-    <EmailsManager
-      templates={(templates ?? []) as any[]}
-      logs={(logs ?? []) as any[]}
-      smtp={smtp}
-    />
+    <EmailsManager templates={templates} logs={logs} smtp={smtp} />
   );
 }

@@ -1,6 +1,6 @@
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
 import { getPublicSettings, settingString } from '@/lib/settings';
+import { getFooterPages } from '@/lib/queries';
 import { Logo } from '@/components/marketing/logo';
 import { NewsletterForm } from '@/components/marketing/newsletter-form';
 
@@ -22,15 +22,7 @@ const COMPANY_LINKS = [
 
 export async function SiteFooter() {
   const settings = await getPublicSettings();
-  const supabase = createClient();
-
-  const { data: legalPages } = await supabase
-    .from('pages')
-    .select('slug, title')
-    .eq('status', 'published')
-    .eq('show_in_footer', true)
-    .eq('page_type', 'legal')
-    .order('sort_order');
+  const legalPages = await getFooterPages();
 
   const socials = [
     { href: settingString(settings, 'social_twitter'), label: 'X' },
@@ -77,7 +69,7 @@ export async function SiteFooter() {
           <FooterColumn title="Company" links={COMPANY_LINKS} />
           <FooterColumn
             title="Legal"
-            links={(legalPages ?? []).map((page: any) => ({
+            links={legalPages.map((page) => ({
               href: `/${page.slug}`,
               label: page.title,
             }))}

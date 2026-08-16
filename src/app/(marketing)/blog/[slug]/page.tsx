@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { getPostBySlug, getPublishedPosts } from '@/lib/queries';
+import { execute } from '@/lib/db';
 import { buildMetadata, breadcrumbSchema, articleSchema, absoluteUrl } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
 import { Card } from '@/components/ui';
@@ -10,16 +11,7 @@ import { formatDate, renderMarkdown } from '@/lib/utils';
 
 export const revalidate = 600;
 
-async function getPost(slug: string) {
-  const supabase = createClient();
-  const { data } = await supabase
-    .from('blog_posts')
-    .select('*, category:blog_categories(slug, name)')
-    .eq('slug', slug)
-    .eq('status', 'published')
-    .maybeSingle();
-  return data as any;
-}
+const getPost = getPostBySlug;
 
 export async function generateMetadata({
   params,
@@ -48,25 +40,12 @@ export default async function BlogPostPage({ params }: { params: { slug: string 
   const post = await getPost(params.slug);
   if (!post) notFound();
 
-  const supabase = createClient();
-  const { data: related } = await supabase
-    .from('blog_posts')
-    .select('slug, title, excerpt, reading_minutes')
-    .eq('status', 'published')
-    .neq('id', post.id)
-    .limit(3);
+  const related = (await getPublishedPosts({ limit: 4 }))
+    .filter((item) => item.id !== post.id)
+    .slice(0, 3);
 
   // Fire-and-forget view counter; never blocks rendering.
-  try {
-    const admin = createAdminClient();
-    void admin
-      .from('blog_posts')
-      .update({ view_count: (post.view_count ?? 0) + 1 })
-      .eq('id', post.id)
-      .then(() => undefined);
-  } catch {
-    // Service role key not configured — view counting is optional.
-  }
+  void execute(`UPDATE blog_posts SET view_count = view_count + 1 WHERE id = ?`, [post.id]);
 
   return (
     <>
@@ -165,7 +144,7 @@ export default async function BlogPostPage({ params }: { params: { slug: string 
             <section className="mt-12">
               <h2 className="text-xl font-bold">Keep reading</h2>
               <div className="mt-5 grid gap-4 sm:grid-cols-3">
-                {(related as any[]).map((item) => (
+                {related.map((item) => (
                   <Link key={item.slug} href={`/blog/${item.slug}`} className="group">
                     <Card className="h-full p-5 transition-all hover:-translate-y-0.5 hover:shadow-md">
                       <h3 className="text-sm font-semibold group-hover:text-primary">

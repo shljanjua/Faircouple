@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { CheckCircle2, Eye, EyeOff } from 'lucide-react';
 import { z } from 'zod';
-import { getBrowserClient } from '@/lib/supabase/client';
+import { signUpAction, resendVerificationAction } from '@/app/actions/auth';
 import { Button } from '@/components/ui/button';
 import { Alert, Field, Input, Select } from '@/components/ui';
 import {
@@ -54,7 +54,6 @@ export function SignUpForm({
 }) {
   const router = useRouter();
   const params = useSearchParams();
-  const supabase = getBrowserClient();
 
   const planSlug = params.get('plan');
   const interval = params.get('interval') ?? 'year';
@@ -111,58 +110,41 @@ export function SignUpForm({
     }
 
     setLoading(true);
-    try {
-      const redirectParams = new URLSearchParams();
-      if (planSlug) {
-        redirectParams.set('plan', planSlug);
-        redirectParams.set('currency', currency);
-        redirectParams.set('interval', interval);
-      }
-      if (inviteToken) redirectParams.set('invite', inviteToken);
-      if (nextPath) redirectParams.set('next', nextPath);
 
-      const emailRedirectTo = `${window.location.origin}/auth/callback${
-        redirectParams.toString() ? `?${redirectParams.toString()}` : ''
-      }`;
+    const form = new FormData();
+    form.set('full_name', fullName.trim());
+    form.set('email', email.trim().toLowerCase());
+    form.set('password', password);
+    form.set('country', country);
+    form.set('currency', currency);
+    form.set('relationship_type', relationshipType);
+    form.set('marketing', String(marketing));
+    form.set('accept_terms', String(acceptTerms));
+    form.set('timezone', Intl.DateTimeFormat().resolvedOptions().timeZone);
 
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim().toLowerCase(),
-        password,
-        options: {
-          emailRedirectTo,
-          data: {
-            full_name: fullName.trim(),
-            currency,
-            country_code: country === 'OTHER' ? null : country,
-            relationship_type: relationshipType,
-            marketing_opt_in: marketing,
-            timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-          },
-        },
-      });
+    const result = await signUpAction(form);
+    setLoading(false);
 
-      if (error) throw error;
-
-      // Fire the welcome / verification email through the configured SMTP too,
-      // so branding is consistent even when Supabase mail is disabled.
-      void fetch('/api/auth/welcome', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim().toLowerCase(), name: fullName.trim() }),
-      }).catch(() => undefined);
-
-      if (data.session) {
-        router.push(planSlug ? `/checkout?plan=${planSlug}&currency=${currency}&interval=${interval}` : '/onboarding');
-        router.refresh();
-        return;
-      }
-
-      setSent(true);
-    } catch (error) {
-      setFormError(error instanceof Error ? error.message : 'Could not create your account.');
-    } finally {
-      setLoading(false);
+    if (!result.ok) {
+      if (result.field) setErrors({ [result.field]: result.error });
+      else setFormError(result.error);
+      return;
     }
+
+    if (result.requiresVerification) {
+      setSent(true);
+      return;
+    }
+
+    // Verification is off, so the account is already signed in.
+    const destination = inviteToken
+      ? `/invite/${inviteToken}`
+      : planSlug
+        ? `/checkout?plan=${planSlug}&currency=${currency}&interval=${interval}`
+        : (nextPath ?? result.redirectTo ?? '/onboarding');
+
+    router.push(destination);
+    router.refresh();
   }
 
   if (sent) {
@@ -179,8 +161,8 @@ export function SignUpForm({
           <button
             type="button"
             className="font-medium underline"
-            onClick={async () => {
-              await supabase.auth.resend({ type: 'signup', email });
+            onClick={() => {
+              void resendVerificationAction(email);
             }}
           >
             resend the email

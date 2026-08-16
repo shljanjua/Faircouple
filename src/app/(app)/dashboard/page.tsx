@@ -11,7 +11,7 @@ import {
   Ticket,
   Wallet,
 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/server';
+import { query, toBool } from '@/lib/db';
 import { getSessionUser, getCoupleContext, getEntitlements } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { buildReport } from '@/lib/fairness';
@@ -42,80 +42,75 @@ export default async function DashboardPage() {
     );
   }
 
-  const supabase = createClient();
+  const coupleId = context.couple.id;
   const period = weekStart();
+  const today = new Date().toISOString().slice(0, 10);
+  const monthStart = `${today.slice(0, 7)}-01`;
 
   const [
-    { data: categories },
-    { data: entries },
-    { data: emotions },
-    { data: checkins },
-    { data: trips },
-    { data: expenses },
-    { data: unreadMessages },
-    { data: checklists },
-    { data: documents },
-    { data: notifications },
+    categories,
+    entries,
+    emotions,
+    checkins,
+    trips,
+    expenses,
+    unreadMessages,
+    checklists,
+    documents,
+    notifications,
   ] = await Promise.all([
-    supabase.from('fairness_categories').select('*').eq('is_active', true).order('sort_order'),
-    supabase.from('fairness_entries').select('*').eq('couple_id', context.couple.id).eq('period', period),
-    supabase
-      .from('emotion_logs')
-      .select('*')
-      .eq('couple_id', context.couple.id)
-      .gte('logged_at', addWeeks(period, -1))
-      .order('logged_at', { ascending: false })
-      .limit(8),
-    supabase
-      .from('daily_checkins')
-      .select('*')
-      .eq('couple_id', context.couple.id)
-      .eq('checkin_date', new Date().toISOString().slice(0, 10)),
-    supabase
-      .from('trips')
-      .select('id, title, start_date, end_date, status, cover_image, destination:destinations(name, hero_image)')
-      .eq('couple_id', context.couple.id)
-      .in('status', ['planning', 'booked', 'ongoing'])
-      .order('start_date', { ascending: true })
-      .limit(3),
-    supabase
-      .from('expenses')
-      .select('amount_cents, currency, paid_by, spent_on')
-      .eq('couple_id', context.couple.id)
-      .gte('spent_on', new Date(new Date().setDate(1)).toISOString().slice(0, 10)),
-    supabase
-      .from('messages')
-      .select('id', { count: 'exact', head: false })
-      .eq('couple_id', context.couple.id)
-      .neq('sender_id', context.me.user_id)
-      .is('read_at', null)
-      .limit(50),
-    supabase
-      .from('checklists')
-      .select('id, title, emoji, items:checklist_items(id, is_done)')
-      .eq('couple_id', context.couple.id)
-      .is('archived_at', null)
-      .limit(4),
-    supabase
-      .from('travel_documents')
-      .select('id, title, doc_type, depart_at, provider')
-      .eq('couple_id', context.couple.id)
-      .gte('depart_at', new Date().toISOString())
-      .order('depart_at', { ascending: true })
-      .limit(3),
-    supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', context.me.user_id)
-      .eq('is_read', false)
-      .order('created_at', { ascending: false })
-      .limit(5),
+    query<any>(`SELECT * FROM fairness_categories WHERE is_active = 1 ORDER BY sort_order ASC`),
+    query<any>(`SELECT * FROM fairness_entries WHERE couple_id = ? AND period = ?`, [coupleId, period]),
+    query<any>(
+      `SELECT * FROM emotion_logs WHERE couple_id = ? AND logged_at >= ?
+        ORDER BY logged_at DESC LIMIT 8`,
+      [coupleId, addWeeks(period, -1)]
+    ),
+    query<any>(`SELECT * FROM daily_checkins WHERE couple_id = ? AND checkin_date = ?`, [
+      coupleId,
+      today,
+    ]),
+    query<any>(
+      `SELECT t.id, t.title, t.start_date, t.end_date, t.status, t.cover_image, d.name AS destination_name
+         FROM trips t LEFT JOIN destinations d ON d.id = t.destination_id
+        WHERE t.couple_id = ? AND t.status IN ('planning','booked','ongoing')
+        ORDER BY t.start_date ASC LIMIT 3`,
+      [coupleId]
+    ),
+    query<any>(
+      `SELECT amount_cents, currency, paid_by, spent_on FROM expenses WHERE couple_id = ? AND spent_on >= ?`,
+      [coupleId, monthStart]
+    ),
+    query<any>(
+      `SELECT id FROM messages WHERE couple_id = ? AND sender_id <> ? AND read_at IS NULL AND deleted_at IS NULL LIMIT 50`,
+      [coupleId, context.me.user_id]
+    ),
+    query<any>(
+      `SELECT c.id, c.title, c.emoji,
+              COUNT(i.id) AS total_items,
+              SUM(CASE WHEN i.is_done = 1 THEN 1 ELSE 0 END) AS done_items
+         FROM checklists c
+         LEFT JOIN checklist_items i ON i.checklist_id = c.id
+        WHERE c.couple_id = ? AND c.archived_at IS NULL
+        GROUP BY c.id, c.title, c.emoji
+        LIMIT 4`,
+      [coupleId]
+    ),
+    query<any>(
+      `SELECT id, title, doc_type, depart_at, provider FROM travel_documents
+        WHERE couple_id = ? AND depart_at >= NOW() ORDER BY depart_at ASC LIMIT 3`,
+      [coupleId]
+    ),
+    query<any>(
+      `SELECT * FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT 5`,
+      [context.me.user_id]
+    ),
   ]);
 
   const report = buildReport({
     period,
-    categories: (categories ?? []) as FairnessCategory[],
-    entries: (entries ?? []) as FairnessEntry[],
+    categories: categories as FairnessCategory[],
+    entries: entries as FairnessEntry[],
     memberA: {
       userId: context.me.user_id,
       name: context.me.profile?.full_name ?? user?.profile.full_name ?? 'You',
@@ -126,15 +121,15 @@ export default async function DashboardPage() {
   });
 
   const risk = RISK_META[report.riskLevel];
-  const myCheckin = (checkins ?? []).find((c: any) => c.user_id === context.me.user_id);
-  const partnerCheckin = (checkins ?? []).find((c: any) => c.user_id !== context.me.user_id);
+  const myCheckin = checkins.find((c: any) => c.user_id === context.me.user_id);
+  const partnerCheckin = checkins.find((c: any) => c.user_id !== context.me.user_id);
 
-  const monthSpend = (expenses ?? []).reduce(
-    (sum: number, expense: any) => sum + (expense.amount_cents ?? 0),
+  const monthSpend = expenses.reduce(
+    (sum: number, expense: any) => sum + Number(expense.amount_cents ?? 0),
     0
   );
-  const myEntriesCount = (entries ?? []).filter((e: any) => e.user_id === context.me.user_id).length;
-  const totalCategories = (categories ?? []).length;
+  const myEntriesCount = entries.filter((e: any) => e.user_id === context.me.user_id).length;
+  const totalCategories = categories.length;
 
   return (
     <div className="space-y-6">
@@ -160,11 +155,11 @@ export default async function DashboardPage() {
         </Alert>
       )}
 
-      {notifications && notifications.length > 0 && (
+      {notifications.length > 0 && (
         <Card className="p-4">
           <h2 className="text-sm font-semibold">New for you</h2>
           <ul className="mt-3 space-y-2">
-            {notifications.map((notification: any) => (
+            {notifications.map((notification) => (
               <li key={notification.id} className="flex items-start gap-3 text-sm">
                 <span aria-hidden>{notification.emoji ?? '🔔'}</span>
                 <span className="min-w-0 flex-1">
@@ -204,7 +199,7 @@ export default async function DashboardPage() {
         />
         <Stat
           label="Unread messages"
-          value={(unreadMessages ?? []).length}
+          value={unreadMessages.length}
           hint="From your partner"
           icon={<MessageCircle className="h-5 w-5" aria-hidden />}
         />
@@ -280,9 +275,9 @@ export default async function DashboardPage() {
       <div className="grid gap-5 lg:grid-cols-3">
         <Card className="p-5">
           <h2 className="font-semibold">Recent emotions</h2>
-          {emotions && emotions.length > 0 ? (
+          {emotions.length > 0 ? (
             <ul className="mt-4 space-y-2.5">
-              {emotions.slice(0, 6).map((emotion: any) => (
+              {emotions.slice(0, 6).map((emotion) => (
                 <li key={emotion.id} className="flex items-center gap-3 text-sm">
                   <span className="text-lg" aria-hidden>
                     {emotion.scope === 'partner' ? '💞' : emotion.scope === 'relationship' ? '🤝' : '🙂'}
@@ -313,11 +308,11 @@ export default async function DashboardPage() {
 
         <Card className="p-5">
           <h2 className="font-semibold">Checklists</h2>
-          {checklists && checklists.length > 0 ? (
+          {checklists.length > 0 ? (
             <ul className="mt-4 space-y-3">
-              {checklists.map((list: any) => {
-                const total = list.items?.length ?? 0;
-                const done = (list.items ?? []).filter((i: any) => i.is_done).length;
+              {checklists.map((list) => {
+                const total = Number(list.total_items ?? 0);
+                const done = Number(list.done_items ?? 0);
                 return (
                   <li key={list.id}>
                     <div className="flex items-center justify-between text-sm">
@@ -344,9 +339,9 @@ export default async function DashboardPage() {
 
         <Card className="p-5">
           <h2 className="font-semibold">Upcoming travel</h2>
-          {trips && trips.length > 0 ? (
+          {trips.length > 0 ? (
             <ul className="mt-4 space-y-3">
-              {trips.map((trip: any) => (
+              {trips.map((trip) => (
                 <li key={trip.id} className="text-sm">
                   <Link href={`/dashboard/travel/${trip.id}`} className="font-medium hover:text-primary">
                     {trip.title}
@@ -362,13 +357,13 @@ export default async function DashboardPage() {
             <p className="mt-4 text-sm text-muted-foreground">No trips planned yet.</p>
           )}
 
-          {documents && documents.length > 0 && (
+          {documents.length > 0 && (
             <div className="mt-4 border-t border-border pt-4">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Next bookings
               </p>
               <ul className="mt-2 space-y-1.5 text-sm">
-                {documents.map((doc: any) => (
+                {documents.map((doc) => (
                   <li key={doc.id} className="flex items-center gap-2">
                     <Ticket className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
                     <span className="truncate">{doc.title}</span>

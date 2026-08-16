@@ -4,14 +4,13 @@ import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Eye, EyeOff } from 'lucide-react';
-import { getBrowserClient } from '@/lib/supabase/client';
+import { signInAction } from '@/app/actions/auth';
 import { Button } from '@/components/ui/button';
 import { Alert, Field, Input } from '@/components/ui';
 
 export function SignInForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const supabase = getBrowserClient();
 
   const nextPath = params.get('next') || '/dashboard';
   const notice = params.get('notice');
@@ -27,17 +26,14 @@ export function SignInForm() {
     setError(null);
     setLoading(true);
 
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: email.trim().toLowerCase(),
-      password,
-    });
+    const formData = new FormData();
+    formData.set('email', email.trim().toLowerCase());
+    formData.set('password', password);
 
-    if (signInError) {
-      setError(
-        signInError.message === 'Email not confirmed'
-          ? 'Please confirm your email address first — check your inbox for the link.'
-          : 'Incorrect email or password.'
-      );
+    const result = await signInAction(formData);
+
+    if (!result.ok) {
+      setError(result.error);
       setLoading(false);
       return;
     }
@@ -55,9 +51,7 @@ export function SignInForm() {
         </p>
       </div>
 
-      {notice === 'verified' && (
-        <Alert tone="success">Email confirmed. You can sign in now.</Alert>
-      )}
+      {notice === 'verified' && <Alert tone="success">Email confirmed. You can sign in now.</Alert>}
       {notice === 'password-updated' && (
         <Alert tone="success">Password updated. Use it to sign in below.</Alert>
       )}

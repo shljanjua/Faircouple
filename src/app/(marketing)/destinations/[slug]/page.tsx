@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Calendar, Clock, MapPin, Star, Wallet } from 'lucide-react';
-import { createClient } from '@/lib/supabase/server';
+import { getDestinationBySlug, getDestinations } from '@/lib/queries';
 import {
   buildMetadata,
   breadcrumbSchema,
@@ -16,16 +16,7 @@ import { formatMoney } from '@/lib/currency';
 
 export const revalidate = 3600;
 
-async function getDestination(slug: string) {
-  const supabase = createClient();
-  const { data } = await supabase
-    .from('destinations')
-    .select('*, country:countries(*), attractions:attractions(*)')
-    .eq('slug', slug)
-    .eq('is_active', true)
-    .maybeSingle();
-  return data as any;
-}
+const getDestination = getDestinationBySlug;
 
 export async function generateMetadata({
   params,
@@ -54,18 +45,11 @@ export default async function DestinationPage({ params }: { params: { slug: stri
   const destination = await getDestination(params.slug);
   if (!destination) notFound();
 
-  const supabase = createClient();
-  const { data: related } = await supabase
-    .from('destinations')
-    .select('name, slug, hero_image, summary, avg_daily_cost_usd')
-    .eq('is_active', true)
-    .neq('id', destination.id)
-    .eq('country_code', destination.country_code)
-    .limit(3);
+  const related = (await getDestinations({ countryCode: destination.country_code, limit: 4 }))
+    .filter((item) => item.id !== destination.id)
+    .slice(0, 3);
 
-  const attractions = (destination.attractions ?? []).sort(
-    (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
-  );
+  const attractions = destination.attractions ?? [];
 
   const faqs = [
     {
@@ -352,7 +336,7 @@ export default async function DestinationPage({ params }: { params: { slug: stri
                 <Card className="p-5">
                   <h2 className="font-semibold">Also in {destination.country?.name}</h2>
                   <ul className="mt-3 space-y-3">
-                    {(related as any[]).map((item) => (
+                    {related.map((item) => (
                       <li key={item.slug}>
                         <Link
                           href={`/destinations/${item.slug}`}

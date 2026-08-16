@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { headers } from 'next/headers';
-import { createClient } from '@/lib/supabase/server';
+import { getActivePlans, getFaqs } from '@/lib/queries';
 import { getSessionUser, getEntitlements } from '@/lib/auth';
 import { buildMetadata, breadcrumbSchema, faqSchema, productSchema } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
@@ -20,7 +20,6 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function PricingPage() {
-  const supabase = createClient();
   const [user, entitlements] = await Promise.all([getSessionUser(), getEntitlements()]);
 
   const headerList = headers();
@@ -32,21 +31,10 @@ export default async function PricingPage() {
 
   const currency = user?.profile.currency ?? currencyForCountry(detectedCountry);
 
-  const [{ data: plans }, { data: faqs }] = await Promise.all([
-    supabase
-      .from('plans')
-      .select('*, prices:plan_prices(*)')
-      .eq('is_active', true)
-      .order('sort_order'),
-    supabase
-      .from('faqs')
-      .select('question, answer')
-      .eq('is_active', true)
-      .eq('category', 'billing')
-      .order('sort_order'),
+  const [allPlans, faqs] = await Promise.all([
+    getActivePlans(),
+    getFaqs({ category: 'billing' }),
   ]);
-
-  const allPlans = (plans ?? []) as any[];
   const comparisonKeys = Object.keys(LIMIT_LABELS) as (keyof typeof LIMIT_LABELS)[];
 
   return (
@@ -71,7 +59,7 @@ export default async function PricingPage() {
                 slug: plan.slug,
               });
             }),
-          ...(faqs?.length ? [faqSchema(faqs as any)] : []),
+          ...(faqs.length ? [faqSchema(faqs as any)] : []),
         ]}
       />
 
@@ -145,7 +133,7 @@ export default async function PricingPage() {
         </div>
       </section>
 
-      {faqs && faqs.length > 0 && (
+      {faqs.length > 0 && (
         <section className="py-16">
           <div className="container max-w-3xl">
             <SectionHeading eyebrow="Billing FAQ" title="Before you subscribe" />

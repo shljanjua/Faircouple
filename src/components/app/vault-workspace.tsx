@@ -2,7 +2,6 @@
 
 import { useMemo, useRef, useState, useTransition, type FormEvent } from 'react';
 import { Download, FileText, Loader2, Plus, Trash2, Upload } from 'lucide-react';
-import { getBrowserClient } from '@/lib/supabase/client';
 import {
   deleteTravelDocumentAction,
   getDocumentUrlAction,
@@ -42,7 +41,6 @@ export function VaultWorkspace({
   trips: { id: string; title: string }[];
   currency: string;
 }) {
-  const supabase = getBrowserClient();
   const [showForm, setShowForm] = useState(documents.length === 0);
   const [uploading, setUploading] = useState(false);
   const [uploaded, setUploaded] = useState<{
@@ -75,19 +73,22 @@ export function VaultWorkspace({
       return;
     }
     setUploading(true);
-    const extension = file.name.split('.').pop() ?? 'pdf';
-    const path = `${coupleId}/${meId}/${Date.now()}.${extension}`;
 
-    const { error } = await supabase.storage.from('documents').upload(path, file, {
-      cacheControl: '3600',
-    });
+    const upload = new FormData();
+    upload.set('bucket', 'documents');
+    upload.set('prefix', 'doc');
+    upload.set('file', file);
 
+    const response = await fetch('/api/upload', { method: 'POST', body: upload });
+    const payload = await response.json().catch(() => ({ error: 'Upload failed.' }));
     setUploading(false);
-    if (error) {
-      setStatus({ ok: false, message: error.message });
+
+    if (!response.ok || !payload.path) {
+      setStatus({ ok: false, message: payload.error ?? 'Upload failed.' });
       return;
     }
-    setUploaded({ path, name: file.name, mime: file.type, size: file.size });
+
+    setUploaded({ path: payload.path, name: file.name, mime: file.type, size: file.size });
     setStatus({ ok: true, message: `${file.name} uploaded — now add the details.` });
   }
 

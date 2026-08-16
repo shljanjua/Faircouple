@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { getCoupleContext } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { BudgetWorkspace } from '@/components/app/budget-workspace';
@@ -23,52 +23,41 @@ export default async function BudgetPage() {
     );
   }
 
-  const supabase = createClient();
-  const monthStart = new Date();
-  monthStart.setDate(1);
+  const coupleId = context.couple.id;
 
-  const [{ data: budgets }, { data: expenses }, { data: shares }, { data: incomes }, { data: settlements }, { data: trips }] =
-    await Promise.all([
-      supabase
-        .from('budgets')
-        .select('*')
-        .eq('couple_id', context.couple.id)
-        .is('archived_at', null)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('expenses')
-        .select('*')
-        .eq('couple_id', context.couple.id)
-        .order('spent_on', { ascending: false })
-        .limit(200),
-      supabase
-        .from('expense_shares')
-        .select('*, expense:expenses!inner(couple_id, is_settled)')
-        .eq('expense.couple_id', context.couple.id)
-        .eq('expense.is_settled', false),
-      supabase.from('incomes').select('*').eq('couple_id', context.couple.id),
-      supabase
-        .from('settlements')
-        .select('*')
-        .eq('couple_id', context.couple.id)
-        .order('settled_on', { ascending: false })
-        .limit(20),
-      supabase
-        .from('trips')
-        .select('id, title')
-        .eq('couple_id', context.couple.id)
-        .neq('status', 'cancelled'),
-    ]);
+  const [budgets, expenses, shares, incomes, settlements, trips] = await Promise.all([
+    query<any>(
+      `SELECT * FROM budgets WHERE couple_id = ? AND archived_at IS NULL ORDER BY created_at DESC`,
+      [coupleId]
+    ),
+    query<any>(`SELECT * FROM expenses WHERE couple_id = ? ORDER BY spent_on DESC LIMIT 200`, [
+      coupleId,
+    ]),
+    query<any>(
+      `SELECT s.* FROM expense_shares s
+         JOIN expenses e ON e.id = s.expense_id
+        WHERE e.couple_id = ? AND e.is_settled = 0`,
+      [coupleId]
+    ),
+    query<any>(`SELECT * FROM incomes WHERE couple_id = ?`, [coupleId]),
+    query<any>(`SELECT * FROM settlements WHERE couple_id = ? ORDER BY settled_on DESC LIMIT 20`, [
+      coupleId,
+    ]),
+    query<{ id: string; title: string }>(
+      `SELECT id, title FROM trips WHERE couple_id = ? AND status <> 'cancelled'`,
+      [coupleId]
+    ),
+  ]);
 
   return (
     <BudgetWorkspace
       currency={context.couple.currency}
-      budgets={(budgets ?? []) as any[]}
-      expenses={(expenses ?? []) as any[]}
-      shares={(shares ?? []) as any[]}
-      incomes={(incomes ?? []) as any[]}
-      settlements={(settlements ?? []) as any[]}
-      trips={(trips ?? []) as any[]}
+      budgets={budgets}
+      expenses={expenses}
+      shares={shares}
+      incomes={incomes}
+      settlements={settlements}
+      trips={trips}
       members={context.members.map((member) => ({
         id: member.user_id,
         name: member.profile?.full_name ?? 'Member',

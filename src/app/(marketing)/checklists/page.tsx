@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { Check } from 'lucide-react';
-import { createClient } from '@/lib/supabase/server';
+import { getChecklistTemplates } from '@/lib/queries';
 import { buildMetadata, breadcrumbSchema, howToSchema } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
 import { Badge, Card, SectionHeading } from '@/components/ui';
@@ -34,14 +34,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 export default async function ChecklistsPage() {
-  const supabase = createClient();
-  const { data: templates } = await supabase
-    .from('checklist_templates')
-    .select('*')
-    .eq('is_public', true)
-    .order('sort_order');
-
-  const list = (templates ?? []) as any[];
+  const list = await getChecklistTemplates();
   const grouped = new Map<string, any[]>();
   for (const template of list) {
     grouped.set(template.category, [...(grouped.get(template.category) ?? []), template]);

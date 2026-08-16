@@ -1,23 +1,14 @@
 import type { Metadata } from 'next';
 import { notFound, permanentRedirect, redirect } from 'next/navigation';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
+import { getCmsPage, getRedirect } from '@/lib/queries';
 import { buildMetadata, breadcrumbSchema } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
 import { formatDate, renderMarkdown } from '@/lib/utils';
 
 export const revalidate = 3600;
 
-async function getPage(slug: string) {
-  const supabase = createClient();
-  const { data } = await supabase
-    .from('pages')
-    .select('*')
-    .eq('slug', slug)
-    .eq('status', 'published')
-    .maybeSingle();
-  return data as any;
-}
+const getPage = getCmsPage;
 
 export async function generateMetadata({
   params,
@@ -45,20 +36,13 @@ export default async function CmsPage({ params }: { params: { slug: string } }) 
 
   if (!page) {
     // Fall back to the admin-managed redirect table before showing a 404.
-    const supabase = createClient();
-    const { data: rule } = await supabase
-      .from('redirects')
-      .select('destination, status_code')
-      .eq('source', `/${params.slug}`)
-      .eq('is_active', true)
-      .maybeSingle();
+    const rule = await getRedirect(`/${params.slug}`);
 
     if (rule) {
-      const destination = (rule as any).destination as string;
-      if ((rule as any).status_code === 302 || (rule as any).status_code === 307) {
-        redirect(destination);
+      if (rule.status_code === 302 || rule.status_code === 307) {
+        redirect(rule.destination);
       }
-      permanentRedirect(destination);
+      permanentRedirect(rule.destination);
     }
 
     notFound();

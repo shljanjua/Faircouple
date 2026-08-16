@@ -3,12 +3,11 @@
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { MailCheck } from 'lucide-react';
-import { getBrowserClient } from '@/lib/supabase/client';
+import { requestPasswordResetAction } from '@/app/actions/auth';
 import { Button } from '@/components/ui/button';
 import { Alert, Field, Input } from '@/components/ui';
 
 export function ForgotPasswordForm() {
-  const supabase = getBrowserClient();
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -19,19 +18,13 @@ export function ForgotPasswordForm() {
     setError(null);
     setLoading(true);
 
-    const { error: resetError } = await supabase.auth.resetPasswordForEmail(
-      email.trim().toLowerCase(),
-      { redirectTo: `${window.location.origin}/auth/callback?next=%2Freset-password` }
-    );
-
+    // The action always reports success, so the form cannot be used to
+    // enumerate which addresses have accounts.
+    const result = await requestPasswordResetAction(email);
     setLoading(false);
-    // Always report success so the form cannot be used to enumerate accounts.
-    if (resetError && !/rate limit/i.test(resetError.message)) {
-      setSent(true);
-      return;
-    }
-    if (resetError) {
-      setError('Too many attempts. Please wait a minute and try again.');
+
+    if (!result.ok) {
+      setError(result.error);
       return;
     }
     setSent(true);
@@ -46,7 +39,10 @@ export function ForgotPasswordForm() {
           If an account exists for <strong className="text-foreground">{email}</strong>, a reset
           link is on its way. It expires in 60 minutes.
         </p>
-        <Link href="/signin" className="text-sm font-medium text-primary underline underline-offset-4">
+        <Link
+          href="/signin"
+          className="text-sm font-medium text-primary underline underline-offset-4"
+        >
           Back to sign in
         </Link>
       </div>

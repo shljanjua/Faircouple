@@ -2,8 +2,14 @@
 
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { ImagePlus, Loader2, Send, Smile, Trash2 } from 'lucide-react';
-import { getBrowserClient } from '@/lib/supabase/client';
-import { sendMessageAction } from '@/app/actions/entries';
+import { saveMediaAssetAction } from '@/app/actions/vault';
+import {
+  deleteMessageAction,
+  fetchMessagesAction,
+  markConversationReadAction,
+  reactToMessageAction,
+  sendMessageAction,
+} from '@/app/actions/entries';
 import { Avatar, Card } from '@/components/ui';
 import { cn, timeAgo } from '@/lib/utils';
 
@@ -29,7 +35,6 @@ const EMOJIS = [
 const REACTIONS = ['❤️', '😂', '😮', '😢', '👍', '🔥'];
 
 export function Messenger({
-  coupleId,
   conversationId,
   initialMessages,
   meId,
@@ -49,7 +54,6 @@ export function Messenger({
   partnerName: string;
   partnerAvatar: string | null;
 }) {
-  const supabase = getBrowserClient();
   const [messages, setMessages] = useState<Message[]>(initialMessages);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
@@ -60,6 +64,14 @@ export function Messenger({
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  const latestRef = useRef<string | null>(
+    initialMessages.length ? initialMessages[initialMessages.length - 1].created_at : null
+  );
+
+  useEffect(() => {
+    if (messages.length) latestRef.current = messages[messages.length - 1].created_at;
+  }, [messages]);
+
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
@@ -68,67 +80,58 @@ export function Messenger({
     scrollToBottom();
   }, [messages.length, scrollToBottom]);
 
-  // Live updates for the other partner's messages.
+  // MySQL has no realtime channel, so the client polls for anything new. The
+  // request only asks for messages created after the newest one it already has.
   useEffect(() => {
-    const channel = supabase
-      .channel(`messages:${coupleId}`)
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages', filter: `couple_id=eq.${coupleId}` },
-        (payload) => {
-          const incoming = payload.new as Message;
-          setMessages((prev) =>
-            prev.some((message) => message.id === incoming.id) ? prev : [...prev, incoming]
-          );
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'messages', filter: `couple_id=eq.${coupleId}` },
-        (payload) => {
-          const updated = payload.new as Message;
-          setMessages((prev) =>
-            prev.map((message) => (message.id === updated.id ? updated : message))
-          );
-        }
-      )
-      .subscribe();
+    if (!partnerId) return;
 
-    return () => {
-      void supabase.removeChannel(channel);
+    let cancelled = false;
+
+    const poll = async () => {
+      const newest = latestRef.current;
+      const result = await fetchMessagesAction(conversationId, newest);
+      if (cancelled || !result.ok) return;
+
+      const incoming = (result.data as Message[] | undefined) ?? [];
+      if (!incoming.length) return;
+
+      setMessages((prev) => {
+        const seen = new Set(prev.map((message) => message.id));
+        const additions = incoming.filter((message) => !seen.has(message.id));
+        return additions.length ? [...prev, ...additions] : prev;
+      });
     };
-  }, [supabase, coupleId]);
+
+    const timer = setInterval(() => void poll(), 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [conversationId, partnerId]);
 
   // Mark the partner's messages as read.
   useEffect(() => {
-    const unread = messages.filter((m) => m.sender_id !== meId && !m.read_at).map((m) => m.id);
-    if (!unread.length) return;
-    void supabase
-      .from('messages')
-      .update({ read_at: new Date().toISOString() })
-      .in('id', unread)
-      .then(() => undefined);
-  }, [messages, meId, supabase]);
+    const hasUnread = messages.some((m) => m.sender_id !== meId && !m.read_at);
+    if (!hasUnread) return;
+    void markConversationReadAction(conversationId);
+  }, [messages, meId, conversationId]);
 
-  // Sign image attachments so they can be displayed.
+  // Attachments are served through the authenticated /api/files route.
   useEffect(() => {
-    const paths = messages
-      .filter((m) => m.message_type === 'image' && m.attachment_path && !imageUrls[m.attachment_path])
-      .map((m) => m.attachment_path!) as string[];
-    if (!paths.length) return;
+    const missing = messages.filter(
+      (m) => m.message_type === 'image' && m.attachment_path && !imageUrls[m.attachment_path]
+    );
+    if (!missing.length) return;
 
-    void supabase.storage
-      .from('couple-media')
-      .createSignedUrls(paths, 3600)
-      .then(({ data }) => {
-        if (!data) return;
-        const map: Record<string, string> = {};
-        for (const item of data) {
-          if (item.path && item.signedUrl) map[item.path] = item.signedUrl;
-        }
-        setImageUrls((prev) => ({ ...prev, ...map }));
-      });
-  }, [messages, supabase, imageUrls]);
+    setImageUrls((prev) => {
+      const next = { ...prev };
+      for (const message of missing) {
+        const path = message.attachment_path!;
+        next[path] = `/api/files/couple-media/${path.split('/').map(encodeURIComponent).join('/')}`;
+      }
+      return next;
+    });
+  }, [messages, imageUrls]);
 
   async function send(event: FormEvent) {
     event.preventDefault();
@@ -166,45 +169,43 @@ export function Messenger({
     setUploading(true);
     setError(null);
 
-    const extension = file.name.split('.').pop() ?? 'jpg';
-    const path = `${coupleId}/${meId}/chat-${Date.now()}.${extension}`;
+    const upload = new FormData();
+    upload.set('bucket', 'couple-media');
+    upload.set('prefix', 'chat');
+    upload.set('file', file);
 
-    const { error: uploadError } = await supabase.storage
-      .from('couple-media')
-      .upload(path, file, { cacheControl: '3600', upsert: false });
+    const response = await fetch('/api/upload', { method: 'POST', body: upload });
+    const payload = await response.json().catch(() => ({ error: 'Upload failed.' }));
 
-    if (uploadError) {
+    if (!response.ok || !payload.path) {
       setUploading(false);
-      setError(uploadError.message);
+      setError(payload.error ?? 'Upload failed.');
       return;
     }
 
     const formData = new FormData();
     formData.set('conversation_id', conversationId);
     formData.set('message_type', 'image');
-    formData.set('attachment_path', path);
+    formData.set('attachment_path', payload.path);
     formData.set('attachment_name', file.name);
     formData.set('attachment_size', String(file.size));
     formData.set('attachment_mime', file.type);
 
     const result = await sendMessageAction(formData);
 
-    await supabase.from('media_assets').insert({
-      couple_id: coupleId,
-      user_id: meId,
-      bucket: 'couple-media',
-      path,
-      file_name: file.name,
-      mime_type: file.type,
-      size_bytes: file.size,
-      kind: 'photo',
-      album: 'Chat',
-    });
+    // Chat photos also land in the shared gallery.
+    const asset = new FormData();
+    asset.set('path', payload.path);
+    asset.set('file_name', file.name);
+    asset.set('mime_type', file.type);
+    asset.set('size_bytes', String(file.size));
+    asset.set('kind', 'photo');
+    asset.set('album', 'Chat');
+    void saveMediaAssetAction(asset);
 
     setUploading(false);
 
     if (!result.ok) {
-      await supabase.storage.from('couple-media').remove([path]);
       setError(result.error);
       return;
     }
@@ -216,27 +217,19 @@ export function Messenger({
   }
 
   async function react(messageId: string, emoji: string) {
-    const message = messages.find((m) => m.id === messageId);
-    if (!message) return;
-    const reactions = { ...(message.reactions ?? {}) };
-    const users = new Set(reactions[emoji] ?? []);
-    if (users.has(meId)) users.delete(meId);
-    else users.add(meId);
-    reactions[emoji] = Array.from(users);
-    if (!reactions[emoji].length) delete reactions[emoji];
-
-    setMessages((prev) =>
-      prev.map((m) => (m.id === messageId ? { ...m, reactions } : m))
-    );
-    await supabase.from('messages').update({ reactions }).eq('id', messageId);
+    const result = await reactToMessageAction(messageId, emoji);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+    const reactions = result.data as Record<string, string[]>;
+    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, reactions } : m)));
   }
 
   async function remove(messageId: string) {
     setMessages((prev) => prev.filter((m) => m.id !== messageId));
-    await supabase
-      .from('messages')
-      .update({ deleted_at: new Date().toISOString() })
-      .eq('id', messageId);
+    const result = await deleteMessageAction(messageId);
+    if (!result.ok) setError(result.error);
   }
 
   return (

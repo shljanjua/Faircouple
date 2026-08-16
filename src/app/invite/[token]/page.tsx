@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { queryOne } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { AcceptInvite } from '@/components/auth/accept-invite';
@@ -14,23 +14,22 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function InvitePage({ params }: { params: { token: string } }) {
-  const supabase = createClient();
   const user = await getSessionUser();
 
-  const { data: invitation } = await supabase
-    .from('couple_invitations')
-    .select('*, couple:couples(name, relationship_type)')
-    .eq('token', params.token)
-    .maybeSingle();
+  const invitation = await queryOne<any>(
+    `SELECT i.*, c.name AS couple_name, c.relationship_type
+       FROM couple_invitations i
+       JOIN couples c ON c.id = i.couple_id
+      WHERE i.token = ? LIMIT 1`,
+    [params.token]
+  );
 
   const invalid =
-    !invitation ||
-    (invitation as any).status !== 'pending' ||
-    new Date((invitation as any).expires_at) < new Date();
+    !invitation || invitation.status !== 'pending' || new Date(invitation.expires_at) < new Date();
 
   if (!user) {
     const target = `/signup?invite=${params.token}${
-      invitation ? `&email=${encodeURIComponent((invitation as any).email)}` : ''
+      invitation ? `&email=${encodeURIComponent(invitation.email)}` : ''
     }`;
     redirect(invalid ? '/signup' : target);
   }
@@ -54,23 +53,23 @@ export default async function InvitePage({ params }: { params: { token: string }
         ) : (
           <Card className="p-6">
             <h1 className="font-display text-xl font-bold">
-              Join {(invitation as any).couple?.name ?? 'this relationship space'}
+              Join {invitation.couple_name ?? 'this relationship space'}
             </h1>
             <p className="mt-2 text-sm text-muted-foreground">
               You have been invited as{' '}
-              <strong>{(invitation as any).display_role ?? 'Partner B'}</strong>. You will log your
+              <strong>{invitation.display_role ?? 'Partner B'}</strong>. You will log your
               own entries — nobody answers on your behalf.
             </p>
 
-            {(invitation as any).message && (
+            {invitation.message && (
               <blockquote className="mt-4 border-l-4 border-primary bg-primary/5 p-3 text-sm italic">
-                {(invitation as any).message}
+                {invitation.message}
               </blockquote>
             )}
 
-            {user.email.toLowerCase() !== String((invitation as any).email).toLowerCase() && (
+            {user.email.toLowerCase() !== String(invitation.email).toLowerCase() && (
               <Alert tone="warning" className="mt-4">
-                This invitation was sent to <strong>{(invitation as any).email}</strong> but you are
+                This invitation was sent to <strong>{invitation.email}</strong> but you are
                 signed in as <strong>{user.email}</strong>. Accepting will link this space to your
                 current account.
               </Alert>

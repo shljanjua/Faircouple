@@ -10,7 +10,7 @@ export const DEFAULT_SETTINGS: SettingsMap = {
   site_tagline: 'Fair love, measured.',
   site_description:
     'FairCouples is the relationship fairness platform for couples and families — track emotions, balance effort, split budgets fairly and plan trips together.',
-  site_url: process.env.NEXT_PUBLIC_SITE_URL || 'https://faircouples.com',
+  site_url: process.env.NEXT_PUBLIC_SITE_URL || 'https://grey-opossum-178268.hostingersite.com',
   support_email: 'support@faircouples.com',
   company_name: 'FairCouples Ltd',
   company_address: '',

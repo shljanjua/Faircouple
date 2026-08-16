@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import type { Metadata } from 'next';
-import { createClient } from '@/lib/supabase/server';
+import { queryOne } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { Card } from '@/components/ui';
@@ -17,12 +17,10 @@ export default async function JoinPage({ params }: { params: { code: string } })
   const user = await getSessionUser();
   if (!user) redirect(`/signup?next=${encodeURIComponent(`/join/${params.code}`)}`);
 
-  const supabase = createClient();
-  const { data: couple } = await supabase
-    .from('couples')
-    .select('id, name, relationship_type, owner_id')
-    .eq('invite_code', params.code.toUpperCase())
-    .maybeSingle();
+  const couple = await queryOne<any>(
+    `SELECT id, name, relationship_type, owner_id FROM couples WHERE invite_code = ? LIMIT 1`,
+    [params.code.toUpperCase()]
+  );
 
   return (
     <div className="flex min-h-screen items-center justify-center px-4 py-16">
@@ -32,7 +30,7 @@ export default async function JoinPage({ params }: { params: { code: string } })
           {couple ? (
             <>
               <h1 className="font-display text-xl font-bold">
-                Join {(couple as any).name ?? 'this space'}
+                Join {couple.name ?? 'this space'}
               </h1>
               <p className="mt-2 text-sm text-muted-foreground">
                 You will get your own entries and your own private notes.

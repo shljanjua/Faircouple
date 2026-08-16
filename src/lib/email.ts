@@ -1,5 +1,6 @@
+import 'server-only';
 import nodemailer from 'nodemailer';
-import { createAdminClient } from '@/lib/supabase/server';
+import { execute, queryOne, uuid, nowSql, toBool } from '@/lib/db';
 import { getAllSettings, settingBool, settingNumber, settingString } from '@/lib/settings';
 
 export interface SendEmailOptions {
@@ -19,12 +20,30 @@ function interpolate(template: string, variables: Record<string, unknown>) {
   });
 }
 
+async function logEmail(row: Record<string, unknown>) {
+  await execute(
+    `INSERT INTO email_logs (id, to_email, from_email, subject, template_slug, status, error, provider, user_id, sent_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'smtp', ?, ?)`,
+    [
+      uuid(),
+      row.to_email,
+      row.from_email ?? null,
+      row.subject ?? null,
+      row.template_slug ?? null,
+      row.status,
+      row.error ?? null,
+      row.user_id ?? null,
+      row.sent_at ?? null,
+    ]
+  );
+}
+
 /**
- * Sends mail through the SMTP credentials configured in the admin panel.
- * Every send is logged to `email_logs` whether it succeeds or fails.
+ * Sends mail through the SMTP account configured in the admin panel
+ * (Hostinger: smtp.hostinger.com). Every send is logged whether it succeeds
+ * or fails, so the admin delivery log always reflects reality.
  */
 export async function sendEmail(options: SendEmailOptions) {
-  const supabase = createAdminClient();
   const settings = await getAllSettings();
 
   let subject = options.subject ?? '';
@@ -32,43 +51,37 @@ export async function sendEmail(options: SendEmailOptions) {
   let text = options.text ?? '';
 
   if (options.template) {
-    const { data: tpl } = await supabase
-      .from('email_templates')
-      .select('subject, html_body, text_body, is_active')
-      .eq('slug', options.template)
-      .maybeSingle();
+    const tpl = await queryOne<any>(
+      `SELECT subject, html_body, text_body, is_active FROM email_templates WHERE slug = ? LIMIT 1`,
+      [options.template]
+    );
 
-    if (tpl && (tpl as any).is_active) {
+    if (tpl && toBool(tpl.is_active)) {
       const vars = {
         site_name: settingString(settings, 'site_name', 'FairCouples'),
         site_url: settingString(settings, 'site_url', ''),
         support_email: settingString(settings, 'support_email', ''),
         ...(options.variables ?? {}),
       };
-      subject = interpolate((tpl as any).subject, vars);
-      html = interpolate((tpl as any).html_body, vars);
-      text = interpolate((tpl as any).text_body ?? '', vars);
+      subject = interpolate(tpl.subject, vars);
+      html = interpolate(tpl.html_body, vars);
+      text = interpolate(tpl.text_body ?? '', vars);
     }
   }
 
   const fromEmail = settingString(settings, 'smtp_from_email', 'no-reply@faircouples.com');
   const fromName = settingString(settings, 'smtp_from_name', 'FairCouples');
 
-  const logRow = {
+  const base = {
     to_email: options.to,
     from_email: fromEmail,
     subject,
     template_slug: options.template ?? null,
     user_id: options.userId ?? null,
-    provider: 'smtp',
   };
 
   if (!settingBool(settings, 'email_enabled', true)) {
-    await supabase.from('email_logs').insert({
-      ...logRow,
-      status: 'failed',
-      error: 'Email sending is disabled in admin settings.',
-    });
+    await logEmail({ ...base, status: 'failed', error: 'Email sending is disabled in admin settings.' });
     return { ok: false, error: 'Email sending is disabled.' };
   }
 
@@ -77,8 +90,8 @@ export async function sendEmail(options: SendEmailOptions) {
   const pass = settingString(settings, 'smtp_password');
 
   if (!host || !user) {
-    await supabase.from('email_logs').insert({
-      ...logRow,
+    await logEmail({
+      ...base,
       status: 'failed',
       error: 'SMTP is not configured. Add credentials in Admin → Email.',
     });
@@ -102,15 +115,11 @@ export async function sendEmail(options: SendEmailOptions) {
       text: text || stripHtml(html),
     });
 
-    await supabase.from('email_logs').insert({
-      ...logRow,
-      status: 'sent',
-      sent_at: new Date().toISOString(),
-    });
+    await logEmail({ ...base, status: 'sent', sent_at: nowSql() });
     return { ok: true };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown SMTP error';
-    await supabase.from('email_logs').insert({ ...logRow, status: 'failed', error: message });
+    await logEmail({ ...base, status: 'failed', error: message });
     return { ok: false, error: message };
   }
 }

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { z } from 'zod';
-import { createAdminClient } from '@/lib/supabase/server';
+import { execute, uuid } from '@/lib/db';
 import { sendEmail } from '@/lib/email';
 import { getAllSettings, settingBool, settingString } from '@/lib/settings';
 
@@ -41,42 +41,47 @@ export async function POST(request: NextRequest) {
     request.headers.get('x-real-ip') ??
     null;
 
-  try {
-    const supabase = createAdminClient();
-    const { error } = await supabase.from('contact_messages').insert({
-      name: parsed.data.name,
-      email: parsed.data.email.toLowerCase(),
-      subject: parsed.data.subject ?? null,
-      message: parsed.data.message,
-      category: parsed.data.category ?? 'general',
-      ip_address: ip,
-    });
+  const saved = await execute(
+    `INSERT INTO contact_messages (id, name, email, subject, message, category, ip_address)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [
+      uuid(),
+      parsed.data.name,
+      parsed.data.email.toLowerCase(),
+      parsed.data.subject ?? null,
+      parsed.data.message,
+      parsed.data.category ?? 'general',
+      ip,
+    ]
+  );
 
-    if (error) throw new Error(error.message);
-
-    // Auto-reply to the sender.
-    await sendEmail({
-      to: parsed.data.email,
-      template: 'contact-received',
-      variables: { name: parsed.data.name },
-    });
-
-    // Notify the support inbox.
-    const settings = await getAllSettings();
-    if (settingBool(settings, 'email_admin_notifications', true)) {
-      const supportEmail = settingString(settings, 'support_email');
-      if (supportEmail) {
-        await sendEmail({
-          to: supportEmail,
-          subject: `New contact form message: ${parsed.data.subject ?? parsed.data.category ?? 'general'}`,
-          html: `<p><strong>${parsed.data.name}</strong> (${parsed.data.email}) wrote:</p><p>${parsed.data.message.replace(/</g, '&lt;')}</p>`,
-        });
-      }
-    }
-
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Could not send your message.';
-    return NextResponse.json({ error: message }, { status: 500 });
+  if (!saved.ok) {
+    return NextResponse.json(
+      { error: saved.error ?? 'Could not send your message.' },
+      { status: 500 }
+    );
   }
+
+  // Auto-reply to the sender.
+  await sendEmail({
+    to: parsed.data.email,
+    template: 'contact-received',
+    variables: { name: parsed.data.name },
+  });
+
+  // Notify the support inbox.
+  const settings = await getAllSettings();
+  if (settingBool(settings, 'email_admin_notifications', true)) {
+    const supportEmail = settingString(settings, 'support_email');
+    if (supportEmail) {
+      const escaped = parsed.data.message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      await sendEmail({
+        to: supportEmail,
+        subject: `New contact form message: ${parsed.data.subject ?? parsed.data.category ?? 'general'}`,
+        html: `<p><strong>${parsed.data.name}</strong> (${parsed.data.email}) wrote:</p><p>${escaped}</p>`,
+      });
+    }
+  }
+
+  return NextResponse.json({ ok: true });
 }

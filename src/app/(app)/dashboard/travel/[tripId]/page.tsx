@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft } from 'lucide-react';
-import { createClient } from '@/lib/supabase/server';
+import { query, queryOne, parseJson, toBool } from '@/lib/db';
 import { getCoupleContext, getEntitlements } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { TripWorkspace } from '@/components/app/trip-workspace';
@@ -16,48 +16,94 @@ export default async function TripDetailPage({ params }: { params: { tripId: str
   if (!context) notFound();
 
   const entitlements = await getEntitlements();
-  const supabase = createClient();
 
-  const { data: trip } = await supabase
-    .from('trips')
-    .select('*, destination:destinations(*, country:countries(name, flag_emoji))')
-    .eq('id', params.tripId)
-    .eq('couple_id', context.couple.id)
-    .maybeSingle();
+  const tripRow = await queryOne<any>(
+    `SELECT t.*, d.id AS destination_id, d.name AS destination_name, d.slug AS destination_slug,
+            d.hero_image AS destination_image, d.ideal_days AS destination_ideal_days,
+            c.name AS country_name, c.flag_emoji AS country_flag
+       FROM trips t
+       LEFT JOIN destinations d ON d.id = t.destination_id
+       LEFT JOIN countries c ON c.code = t.country_code
+      WHERE t.id = ? AND t.couple_id = ?
+      LIMIT 1`,
+    [params.tripId, context.couple.id]
+  );
 
-  if (!trip) notFound();
+  if (!tripRow) notFound();
 
-  const [{ data: itineraries }, { data: documents }, { data: packingLists }, { data: expenses }, { data: templates }] =
+  const trip = {
+    ...tripRow,
+    destination: tripRow.destination_id
+      ? {
+          id: tripRow.destination_id,
+          name: tripRow.destination_name,
+          slug: tripRow.destination_slug,
+          hero_image: tripRow.destination_image,
+          ideal_days: tripRow.destination_ideal_days,
+          country: { name: tripRow.country_name, flag_emoji: tripRow.country_flag },
+        }
+      : null,
+  };
+
+  const [itineraryRow, documents, packingRows, packingItemRows, expenses, templates] =
     await Promise.all([
-      supabase
-        .from('itineraries')
-        .select('*, days:itinerary_days(*, items:itinerary_items(*))')
-        .eq('trip_id', params.tripId)
-        .order('created_at', { ascending: false }),
-      supabase
-        .from('travel_documents')
-        .select('*')
-        .eq('trip_id', params.tripId)
-        .order('depart_at', { ascending: true }),
-      supabase
-        .from('packing_lists')
-        .select('*, items:packing_items(*)')
-        .eq('trip_id', params.tripId),
-      supabase.from('expenses').select('*').eq('trip_id', params.tripId),
-      supabase
-        .from('checklist_templates')
-        .select('id, name, emoji, category')
-        .in('category', ['packing', 'travel', 'honeymoon'])
-        .order('sort_order'),
+      queryOne<any>(
+        `SELECT * FROM itineraries WHERE trip_id = ? ORDER BY created_at DESC LIMIT 1`,
+        [params.tripId]
+      ),
+      query<any>(`SELECT * FROM travel_documents WHERE trip_id = ? ORDER BY depart_at ASC`, [
+        params.tripId,
+      ]),
+      query<any>(`SELECT * FROM packing_lists WHERE trip_id = ?`, [params.tripId]),
+      query<any>(
+        `SELECT i.* FROM packing_items i
+           JOIN packing_lists l ON l.id = i.list_id
+          WHERE l.trip_id = ? ORDER BY i.sort_order ASC`,
+        [params.tripId]
+      ),
+      query<any>(`SELECT * FROM expenses WHERE trip_id = ?`, [params.tripId]),
+      query<any>(
+        `SELECT id, name, emoji, category FROM checklist_templates
+          WHERE category IN ('packing','travel','honeymoon') ORDER BY sort_order ASC`
+      ),
     ]);
 
-  const itinerary = ((itineraries ?? []) as any[])[0] ?? null;
-  if (itinerary?.days) {
-    itinerary.days.sort((a: any, b: any) => a.day_number - b.day_number);
-    for (const day of itinerary.days) {
-      day.items?.sort((a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-    }
+  let itinerary: any = null;
+  if (itineraryRow) {
+    const days = await query<any>(
+      `SELECT * FROM itinerary_days WHERE itinerary_id = ? ORDER BY day_number ASC`,
+      [itineraryRow.id]
+    );
+    const items = days.length
+      ? await query<any>(
+          `SELECT * FROM itinerary_items WHERE day_id IN (${days.map(() => '?').join(',')})
+            ORDER BY sort_order ASC`,
+          days.map((day) => day.id)
+        )
+      : [];
+
+    itinerary = {
+      ...itineraryRow,
+      interests: parseJson<string[]>(itineraryRow.interests, []),
+      days: days.map((day) => ({
+        ...day,
+        items: items
+          .filter((item) => item.day_id === day.id)
+          .map((item) => ({ ...item, is_done: toBool(item.is_done) })),
+      })),
+    };
   }
+
+  const packingLists = packingRows.map((list) => ({
+    ...list,
+    items: packingItemRows
+      .filter((item) => item.list_id === list.id)
+      .map((item) => ({
+        ...item,
+        is_packed: toBool(item.is_packed),
+        is_essential: toBool(item.is_essential),
+      })),
+  }));
 
   return (
     <div className="space-y-6">
@@ -72,15 +118,10 @@ export default async function TripDetailPage({ params }: { params: { tripId: str
       <TripWorkspace
         trip={trip as any}
         itinerary={itinerary}
-        documents={(documents ?? []) as any[]}
-        packingLists={((packingLists ?? []) as any[]).map((list) => ({
-          ...list,
-          items: (list.items ?? []).sort(
-            (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
-          ),
-        }))}
-        expenses={(expenses ?? []) as any[]}
-        templates={(templates ?? []) as any[]}
+        documents={documents}
+        packingLists={packingLists}
+        expenses={expenses}
+        templates={templates}
         members={context.members.map((member) => ({
           id: member.user_id,
           name: member.profile?.full_name ?? 'Member',

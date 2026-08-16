@@ -11,12 +11,12 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy to Vercel
+    name: Deploy to Hostinger
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     environment:
       name: production
-      url: ${{ steps.deploy.outputs.url }}
+      url: ${{ vars.NEXT_PUBLIC_SITE_URL || 'https://grey-opossum-178268.hostingersite.com' }}
 
     steps:
       - name: Checkout
@@ -34,34 +34,58 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Install Vercel CLI
-        run: npm install --global vercel@latest
-
-      - name: Pull Vercel environment
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-        env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-
       - name: Build
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+        run: npm run build
         env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL || 'https://grey-opossum-178268.hostingersite.com' }}
+          # The database is not reachable from CI; the build only needs a
+          # signing secret to be present.
+          AUTH_SECRET: ci-build-secret-not-used-at-runtime-000000
 
-      - name: Deploy
-        id: deploy
+      # Deployment target: a Hostinger VPS (or any host that can run Node 20).
+      # Hostinger's shared plans are PHP-only and cannot serve a Next.js build,
+      # so the app runs on the VPS while the domain and MySQL stay in hPanel.
+      - name: Check deploy secrets
+        id: check
         run: |
-          URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
-          echo "url=$URL" >> "$GITHUB_OUTPUT"
-          echo "Deployed to $URL"
+          if [ -n "${{ secrets.SSH_HOST }}" ] && [ -n "${{ secrets.SSH_KEY }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SSH_HOST / SSH_KEY are not set — skipping the upload step."
+          fi
+
+      - name: Set up SSH
+        if: steps.check.outputs.ready == 'true'
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -p "${{ secrets.SSH_PORT || 22 }}" -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Upload build
+        if: steps.check.outputs.ready == 'true'
         env:
-          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          REMOTE_PATH: ${{ secrets.SSH_PATH || '/var/www/faircouples' }}
+        run: |
+          rsync -az --delete \
+            -e "ssh -p ${{ secrets.SSH_PORT || 22 }} -i ~/.ssh/id_ed25519" \
+            --exclude '.git' --exclude 'node_modules' --exclude '.env.local' \
+            ./ "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:$REMOTE_PATH/"
+
+      - name: Install and restart
+        if: steps.check.outputs.ready == 'true'
+        env:
+          REMOTE_PATH: ${{ secrets.SSH_PATH || '/var/www/faircouples' }}
+        run: |
+          ssh -p "${{ secrets.SSH_PORT || 22 }}" -i ~/.ssh/id_ed25519 \
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+            "cd $REMOTE_PATH && npm ci --omit=dev && pm2 reload faircouples || pm2 start 'npm start' --name faircouples && pm2 save"
 
       - name: Ping sitemap
+        if: steps.check.outputs.ready == 'true'
         continue-on-error: true
         run: |
-          SITE="${{ vars.NEXT_PUBLIC_SITE_URL || 'https://faircouples.com' }}"
+          SITE="${{ vars.NEXT_PUBLIC_SITE_URL || 'https://grey-opossum-178268.hostingersite.com' }}"
           curl -sS "https://www.google.com/ping?sitemap=$SITE/sitemap.xml" || true
           curl -sS "https://www.bing.com/ping?sitemap=$SITE/sitemap.xml" || true

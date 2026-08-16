@@ -23,7 +23,7 @@ import {
   Wallet,
   X,
 } from 'lucide-react';
-import { getBrowserClient } from '@/lib/supabase/client';
+import { signOutAction } from '@/app/actions/auth';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { Logo } from '@/components/marketing/logo';
 import { Avatar, Badge } from '@/components/ui';
@@ -91,7 +91,7 @@ export function AppShell({
   const [open, setOpen] = useState(false);
 
   async function signOut() {
-    await getBrowserClient().auth.signOut();
+    await signOutAction();
     router.push('/signin');
     router.refresh();
   }

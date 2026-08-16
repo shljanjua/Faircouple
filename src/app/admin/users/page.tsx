@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { limitOffset, query, queryOne, parseJson } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { UsersTable } from '@/components/admin/users-table';
@@ -17,42 +17,61 @@ export default async function AdminUsersPage({
   searchParams: { q?: string; role?: string; status?: string; page?: string };
 }) {
   const me = await getSessionUser();
-  const supabase = createAdminClient();
   const page = Math.max(1, Number(searchParams.page ?? 1));
   const pageSize = 25;
 
-  let query = supabase
-    .from('profiles')
-    .select('*', { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range((page - 1) * pageSize, page * pageSize - 1);
+  // Filters are assembled as parameterised fragments — no value is interpolated.
+  const where: string[] = [];
+  const params: unknown[] = [];
 
   if (searchParams.q) {
-    query = query.or(`email.ilike.%${searchParams.q}%,full_name.ilike.%${searchParams.q}%`);
+    where.push('(email LIKE ? OR full_name LIKE ?)');
+    params.push(`%${searchParams.q}%`, `%${searchParams.q}%`);
   }
-  if (searchParams.role) query = query.eq('role', searchParams.role);
-  if (searchParams.status) query = query.eq('status', searchParams.status);
+  if (searchParams.role) {
+    where.push('role = ?');
+    params.push(searchParams.role);
+  }
+  if (searchParams.status) {
+    where.push('status = ?');
+    params.push(searchParams.status);
+  }
 
-  const { data: users, count } = await query;
+  const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
-  const { data: plans } = await supabase
-    .from('plans')
-    .select('id, name')
-    .eq('is_active', true)
-    .order('sort_order');
+  const [userRows, totalRow, plans] = await Promise.all([
+    query<any>(
+      `SELECT * FROM profiles ${clause} ORDER BY created_at DESC ${limitOffset(
+        pageSize,
+        (page - 1) * pageSize
+      )}`,
+      params
+    ),
+    queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM profiles ${clause}`, params),
+    query<any>(`SELECT id, name FROM plans WHERE is_active = 1 ORDER BY sort_order ASC`),
+  ]);
 
-  const userIds = (users ?? []).map((user: any) => user.id);
-  const { data: subscriptions } = userIds.length
-    ? await supabase
-        .from('subscriptions')
-        .select('user_id, status, plan:plans(name)')
-        .in('user_id', userIds)
-        .in('status', ['active', 'trialing'])
-    : { data: [] as any[] };
+  const count = Number(totalRow?.total ?? 0);
+
+  const users = userRows.map((user) => ({
+    ...user,
+    notification_prefs: parseJson<Record<string, boolean>>(user.notification_prefs, {}),
+  }));
+
+  const subscriptions = users.length
+    ? await query<any>(
+        `SELECT s.user_id, p.name AS plan_name
+           FROM subscriptions s
+           LEFT JOIN plans p ON p.id = s.plan_id
+          WHERE s.status IN ('active','trialing')
+            AND s.user_id IN (${users.map(() => '?').join(',')})`,
+        users.map((user) => user.id)
+      )
+    : [];
 
   const planByUser = new Map<string, string>();
-  for (const subscription of (subscriptions ?? []) as any[]) {
-    planByUser.set(subscription.user_id, subscription.plan?.name ?? 'Paid');
+  for (const subscription of subscriptions) {
+    planByUser.set(subscription.user_id, subscription.plan_name ?? 'Paid');
   }
 
   return (
@@ -60,7 +79,7 @@ export default async function AdminUsersPage({
       <header>
         <h1 className="font-display text-2xl font-bold">Users</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {count ?? 0} accounts. Change roles, suspend abusive accounts, grant plans or delete a
+          {count} accounts. Change roles, suspend abusive accounts, grant plans or delete a
           member entirely.
         </p>
       </header>
@@ -109,14 +128,14 @@ export default async function AdminUsersPage({
       </Card>
 
       <UsersTable
-        users={(users ?? []) as any[]}
-        plans={(plans ?? []) as any[]}
+        users={users}
+        plans={plans}
         planByUser={Object.fromEntries(planByUser)}
         myId={me!.id}
         myRole={me!.profile.role}
         page={page}
         pageSize={pageSize}
-        total={count ?? 0}
+        total={count}
       />
     </div>
   );
