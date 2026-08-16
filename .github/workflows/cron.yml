@@ -1,0 +1,39 @@
+name: Scheduled jobs
+
+on:
+  schedule:
+    # 08:00 UTC daily — trip reminders, invitation expiry.
+    - cron: '0 8 * * *'
+    # 09:00 UTC Mondays — weekly fairness reports.
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Which job to run'
+        required: false
+        default: 'all'
+        type: choice
+        options: [all, trip-reminders, weekly-reports, expire-invites]
+
+jobs:
+  run:
+    name: Run scheduled jobs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Call the cron endpoint
+        run: |
+          SITE="${{ vars.NEXT_PUBLIC_SITE_URL || 'https://faircouples.com' }}"
+          JOB="${{ github.event.inputs.job || 'all' }}"
+          echo "Running job: $JOB"
+          RESPONSE=$(curl -sS -w '\n%{http_code}' \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "$SITE/api/cron?job=$JOB")
+          BODY=$(echo "$RESPONSE" | head -n -1)
+          CODE=$(echo "$RESPONSE" | tail -n 1)
+          echo "$BODY"
+          if [ "$CODE" != "200" ]; then
+            echo "Cron endpoint returned HTTP $CODE"
+            exit 1
+          fi

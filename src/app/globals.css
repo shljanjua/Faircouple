@@ -1,0 +1,179 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 350 40% 99%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 347 77% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 341 100% 96%;
+    --accent-foreground: 347 77% 40%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 69% 31%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 50%;
+    --warning-foreground: 26 83% 14%;
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 347 77% 50%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 224 47% 7%;
+    --foreground: 210 40% 98%;
+    --card: 224 40% 10%;
+    --card-foreground: 210 40% 98%;
+    --popover: 224 40% 10%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 347 85% 58%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 223 30% 16%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 223 30% 16%;
+    --muted-foreground: 217 15% 65%;
+    --accent: 347 40% 20%;
+    --accent-foreground: 347 90% 85%;
+    --destructive: 0 63% 50%;
+    --destructive-foreground: 0 0% 100%;
+    --success: 152 55% 45%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 26 83% 14%;
+    --border: 223 25% 20%;
+    --input: 223 25% 20%;
+    --ring: 347 85% 58%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    @apply bg-primary/20;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-display tracking-tight;
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+
+  input[type='range'] {
+    @apply h-2 w-full cursor-pointer appearance-none rounded-full bg-muted;
+  }
+
+  input[type='range']::-webkit-slider-thumb {
+    @apply h-5 w-5 appearance-none rounded-full border-2 border-background bg-primary shadow-md;
+  }
+
+  input[type='range']::-moz-range-thumb {
+    @apply h-5 w-5 rounded-full border-2 border-background bg-primary shadow-md;
+  }
+}
+
+@layer components {
+  .card-surface {
+    @apply rounded-xl border border-border bg-card text-card-foreground shadow-sm;
+  }
+
+  .prose-cms {
+    @apply max-w-none leading-relaxed text-muted-foreground;
+  }
+  .prose-cms h2 {
+    @apply mb-3 mt-10 text-2xl font-semibold text-foreground;
+  }
+  .prose-cms h3 {
+    @apply mb-2 mt-8 text-xl font-semibold text-foreground;
+  }
+  .prose-cms h4 {
+    @apply mb-2 mt-6 text-lg font-semibold text-foreground;
+  }
+  .prose-cms p {
+    @apply my-4;
+  }
+  .prose-cms ul {
+    @apply my-4 list-disc space-y-2 pl-6;
+  }
+  .prose-cms ol {
+    @apply my-4 list-decimal space-y-2 pl-6;
+  }
+  .prose-cms a {
+    @apply font-medium text-primary underline underline-offset-4 hover:opacity-80;
+  }
+  .prose-cms strong {
+    @apply font-semibold text-foreground;
+  }
+  .prose-cms blockquote {
+    @apply my-6 border-l-4 border-primary/40 bg-accent/40 py-2 pl-5 pr-4 italic text-foreground;
+  }
+  .prose-cms code {
+    @apply rounded bg-muted px-1.5 py-0.5 text-sm;
+  }
+
+  .gradient-text {
+    @apply bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 bg-clip-text text-transparent;
+  }
+
+  .glass {
+    @apply border border-white/20 bg-white/70 backdrop-blur-xl dark:border-white/10 dark:bg-slate-900/70;
+  }
+
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-muted;
+  }
+  .skeleton::after {
+    @apply absolute inset-0 -translate-x-full animate-shimmer bg-gradient-to-r from-transparent via-white/40 to-transparent content-[''];
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .grid-pattern {
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.4) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.4) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}
