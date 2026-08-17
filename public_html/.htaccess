@@ -1,0 +1,63 @@
+# ============================================================================
+# FairCouples — Apache / LiteSpeed configuration for Hostinger shared hosting.
+# Upload the whole contents of this folder into public_html.
+# ============================================================================
+
+Options -Indexes -MultiViews
+DirectoryIndex index.php
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Force HTTPS (Hostinger issues a free certificate for every domain).
+  RewriteCond %{HTTPS} !=on
+  RewriteCond %{HTTP:X-Forwarded-Proto} !https
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+  # Strip a trailing slash so /pricing/ and /pricing are one URL.
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^(.+)/$ /$1 [L,R=301]
+
+  # Anything that is not a real file goes through the front controller.
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.php [L]
+</IfModule>
+
+# The application code and the upload store are never served directly.
+RedirectMatch 404 ^/app/
+RedirectMatch 404 ^/storage/
+
+<FilesMatch "\.(sql|md|json|lock|log|ini|yml|yaml|sh|bak)$">
+  Require all denied
+</FilesMatch>
+
+<Files ".env">
+  Require all denied
+</Files>
+
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  # Long cache for fingerprinted static assets only.
+  <FilesMatch "\.(css|js|svg|woff2|png|jpg|jpeg|webp|ico)$">
+    Header set Cache-Control "public, max-age=2592000"
+  </FilesMatch>
+</IfModule>
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css text/plain text/xml application/javascript application/json image/svg+xml
+</IfModule>
+
+# PHP settings for uploads (Hostinger honours these in .htaccess on LiteSpeed).
+<IfModule lsapi_module>
+  php_value upload_max_filesize 32M
+  php_value post_max_size 34M
+  php_value max_execution_time 120
+  php_value memory_limit 256M
+</IfModule>
+
+ErrorDocument 404 /404

@@ -28,3 +28,7 @@ tsconfig.tsbuildinfo
 
 # Uploaded photos, avatars and booking documents (see UPLOAD_DIR)
 storage/uploads/
+
+# Member uploads — tickets, documents and photos never belong in git.
+public_html/storage/uploads/*
+!public_html/storage/uploads/.gitkeep

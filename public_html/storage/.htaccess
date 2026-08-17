@@ -1,0 +1,3 @@
+# Uploaded photos, tickets and documents are served only through /file.php,
+# which checks the signed-in member's session and couple membership first.
+Require all denied

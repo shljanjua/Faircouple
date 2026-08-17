@@ -35,7 +35,7 @@ SET FOREIGN_KEY_CHECKS = 0;
 
 CREATE TABLE IF NOT EXISTS users (
   id                CHAR(36)     NOT NULL DEFAULT (UUID()),
-  email             VARCHAR(255) COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  email             VARCHAR(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   password_hash     VARCHAR(255) NULL,
   email_verified_at DATETIME     NULL,
   disabled_at       DATETIME     NULL,
@@ -78,7 +78,7 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
 
 CREATE TABLE IF NOT EXISTS profiles (
   id                 CHAR(36)     NOT NULL,
-  email              VARCHAR(255) COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  email              VARCHAR(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   full_name          VARCHAR(160) NULL,
   display_name       VARCHAR(160) NULL,
   avatar_url         TEXT         NULL,
@@ -163,7 +163,7 @@ CREATE TABLE IF NOT EXISTS couple_members (
 CREATE TABLE IF NOT EXISTS couple_invitations (
   id           CHAR(36) NOT NULL DEFAULT (UUID()),
   couple_id    CHAR(36) NOT NULL,
-  email        VARCHAR(255) COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  email        VARCHAR(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   token        VARCHAR(64) NOT NULL,
   invited_by   CHAR(36) NOT NULL,
   display_role VARCHAR(60) NULL,
@@ -1265,7 +1265,7 @@ CREATE TABLE IF NOT EXISTS contact_messages (
 
 CREATE TABLE IF NOT EXISTS newsletter_subscribers (
   id              CHAR(36) NOT NULL DEFAULT (UUID()),
-  email           VARCHAR(255) COLLATE utf8mb4_0900_ai_ci NOT NULL,
+  email           VARCHAR(255) COLLATE utf8mb4_unicode_ci NOT NULL,
   name            VARCHAR(160) NULL,
   status          ENUM('subscribed','unsubscribed','bounced') NOT NULL DEFAULT 'subscribed',
   source          VARCHAR(60) NULL,
@@ -1793,7 +1793,7 @@ INSERT INTO site_settings (setting_key, value, group_name, label, description, i
   ('seo_default_title','"FairCouples — Relationship Fairness, Emotions, Budget & Travel Planner for Couples"','seo','Default title tag',NULL,true,false),
   ('seo_title_template','"%s | FairCouples"','seo','Title template',NULL,true,false),
   ('seo_keywords','["relationship app for couples","fairness in relationships","couples emotion tracker","relationship compatibility test","couples budget app","honeymoon itinerary planner","couples travel checklist","love vs attraction test","shared expense splitter for couples","couples private messaging app"]','seo','Global keywords',NULL,true,false),
-  ('seo_og_image','"/og"','seo','Default OG image',NULL,true,false),
+  ('seo_default_og_image','"/og"','seo','Default OG image',NULL,true,false),
   ('seo_twitter_handle','"@faircouples"','seo','Twitter handle',NULL,true,false),
   ('seo_robots','"index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1"','seo','Default robots directive',NULL,true,false),
   ('seo_google_verification','""','seo','Google Search Console token',NULL,true,false),
@@ -1801,7 +1801,7 @@ INSERT INTO site_settings (setting_key, value, group_name, label, description, i
   ('seo_yandex_verification','""','seo','Yandex verification token',NULL,true,false),
   ('seo_pinterest_verification','""','seo','Pinterest verification token',NULL,true,false),
   ('seo_sitemap_enabled','true','seo','Generate sitemap.xml',NULL,true,false),
-  ('seo_noindex_site','false','seo','No-index the whole site','Emergency switch — blocks all indexing.',true,false),
+  ('seo_block_indexing','false','seo','No-index the whole site','Emergency switch — blocks all indexing.',true,false),
 
   ('analytics_ga4_id','""','integrations','Google Analytics 4 ID','e.g. G-XXXXXXXXXX',true,false),
   ('analytics_gtm_id','""','integrations','Google Tag Manager ID','e.g. GTM-XXXXXXX',true,false),
@@ -1813,9 +1813,9 @@ INSERT INTO site_settings (setting_key, value, group_name, label, description, i
   ('analytics_adsense_auto_ads','true','integrations','AdSense auto ads',NULL,true,false),
   ('analytics_clarity_id','""','integrations','Microsoft Clarity ID',NULL,true,false),
   ('analytics_hotjar_id','""','integrations','Hotjar site ID',NULL,true,false),
-  ('analytics_tiktok_pixel','""','integrations','TikTok Pixel ID',NULL,true,false),
-  ('analytics_pinterest_tag','""','integrations','Pinterest Tag ID',NULL,true,false),
-  ('analytics_linkedin_partner','""','integrations','LinkedIn Partner ID',NULL,true,false),
+  ('analytics_tiktok_pixel_id','""','integrations','TikTok Pixel ID',NULL,true,false),
+  ('analytics_pinterest_tag_id','""','integrations','Pinterest Tag ID',NULL,true,false),
+  ('analytics_linkedin_partner_id','""','integrations','LinkedIn Partner ID',NULL,true,false),
   ('cookie_banner_enabled','true','integrations','Cookie consent banner',NULL,true,false),
 
   ('smtp_host','""','email','SMTP host','e.g. smtp.hostinger.com',false,true),
@@ -1854,10 +1854,10 @@ UPDATE site_settings
 INSERT INTO payment_gateways (provider, display_name, is_enabled, mode, credentials, supported_currencies, sort_order, instructions) VALUES
   ('stripe','Stripe (Cards, Apple Pay, Google Pay)', false, 'test',
    '{"publishable_key":"","secret_key":"","webhook_secret":""}',
-   '["USD", "GBP", "EUR", "CAD", "AUD"]', 1, 'Add your keys from dashboard.stripe.com → Developers → API keys. Webhook endpoint: /api/webhooks/stripe'),
-  ('paypal','PayPal', false, 'sandbox_to_live',
+   '["USD", "GBP", "EUR", "CAD", "AUD"]', 1, 'Add your keys from dashboard.stripe.com → Developers → API keys. Webhook endpoint: /webhook-stripe.php'),
+  ('paypal','PayPal', false, 'test',
    '{"client_id":"","client_secret":"","webhook_id":""}',
-   '["USD", "GBP", "EUR", "CAD", "AUD"]', 2, 'Create a REST app at developer.paypal.com. Webhook endpoint: /api/webhooks/paypal'),
+   '["USD", "GBP", "EUR", "CAD", "AUD"]', 2, 'Create a REST app at developer.paypal.com. Webhook endpoint: /webhook-paypal.php'),
   ('manual','Bank transfer / manual', false, 'live',
    '{"instructions":""}', '["USD", "GBP", "EUR", "CAD", "AUD"]', 3,
    'Admin marks the subscription active after receiving payment.')
