@@ -14,28 +14,32 @@ Seo::faq($faqs);
 Seo::reviews($testimonials);
 
 View::begin('layouts/public', [
-    'title'       => Settings::text('site_name', 'FairCouples') . ' — Relationship Fairness, Emotions, Budget & Travel Planner for Couples',
-    'description' => 'Measure fairness in your relationship. Both partners log emotions and effort separately, then see one shared report — plus fair budgeting, gift planning and full honeymoon travel planning.',
+    'title'       => Settings::text('site_name', 'FairCouples') . ' — A Private Space to Love, Understand & Grow Together',
+    'description' => 'FairCouples is a private space for two people to love, understand, remember and grow together — daily feelings, little love notes, Open-when letters, your shared story, and a fairness engine that helps you notice what needs care. Free forever plan.',
 ]);
 ?>
 
 <section class="hero">
   <div class="container">
-    <p class="eyebrow">💗 For couples, and any two people who care</p>
-    <h1>The relationship app that measures whether it is actually fair.</h1>
+    <p class="eyebrow">💗 A private space for two people who choose each other</p>
+    <h1>Love. Understand. Remember. Grow — together.</h1>
     <p class="lead">
-      You both log your own side — privately, from anywhere in the world. FairCouples compares the two
-      and shows where effort, respect and loyalty are drifting apart, across ten areas that decide whether
+      A warm, private home for your relationship: share how you feel each day, send a little love,
+      keep your memories and plan your future side by side. And underneath it all, a quiet
+      intelligence that helps you notice what needs care — across ten areas that decide whether
       a relationship holds.
     </p>
 
     <div class="row mt-3">
-      <a class="btn btn-lg" href="/signup">Start free — no card needed</a>
+      <a class="btn btn-lg" href="/signup">Create your couple space — free</a>
       <a class="btn btn-lg btn-outline" href="/love-or-attraction">Is it love or attraction?</a>
     </div>
 
     <p class="small muted mt-3">
       Free forever plan · Works long-distance · One subscription covers both partners
+    </p>
+    <p class="small mt-2" style="font-style:italic;color:hsl(var(--muted-fg))">
+      Measure less. Understand more. Love better. ❤️
     </p>
   </div>
 </section>

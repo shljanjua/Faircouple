@@ -2343,9 +2343,9 @@ ON DUPLICATE KEY UPDATE
 
 -- SEO metadata for the key public routes.
 INSERT INTO seo_meta (path, title, description, keywords, priority, changefreq) VALUES
-  ('/','FairCouples — Relationship Fairness, Emotions, Budget & Travel Planner for Couples',
-   'Measure fairness in your relationship. Both partners log emotions and effort separately, then see one shared report — plus fair budgeting, gift planning and full honeymoon travel planning.',
-   '["relationship app for couples", "fairness in relationships", "couples emotion tracker", "couples budget app", "honeymoon planner"]',1.0,'daily'),
+  ('/','FairCouples — A Private Space to Love, Understand & Grow Together',
+   'FairCouples is a private space for two people to love, understand, remember and grow together — daily feelings, little love notes, Open-when letters, your shared story, fair budgeting and travel planning, with a fairness engine that helps you notice what needs care. Free forever plan.',
+   '["relationship app for couples", "couples app", "love and care app", "open when letters", "couples memory timeline", "relationship fairness", "couples emotion tracker", "long distance couples app"]',1.0,'daily'),
   ('/pricing','Pricing — FairCouples Plans in USD, GBP, EUR, CAD & AUD',
    'Simple pricing for couples. One subscription covers both partners. Free forever plan, 14-day trial on paid plans, cancel any time.',
    '["couples app pricing", "relationship app subscription", "faircouples pricing"]',0.9,'weekly'),
@@ -2410,7 +2410,108 @@ INSERT IGNORE INTO testimonials (author_name, author_role, author_location, quot
   ('Grace & her mother Ruth','Family space','Vancouver, Canada','We use it as mother and daughter. Being able to write our own entries separately and then read each other''s changed how we talk.',5,true,6);
 
 -- ============================================================================
+
+-- ---------------------------------------------------------------------------
+-- LOVE & CARE — the emotional layer (also in database/mysql/love-care.sql)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS love_moods (
+  id         CHAR(36) NOT NULL DEFAULT (UUID()),
+  couple_id  CHAR(36) NOT NULL,
+  user_id    CHAR(36) NOT NULL,
+  mood_date  DATE NOT NULL,
+  feeling    VARCHAR(40) NOT NULL,
+  need       VARCHAR(40) NULL,
+  note       VARCHAR(280) NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY love_moods_day_unique (user_id, mood_date),
+  KEY love_moods_couple_idx (couple_id, mood_date),
+  CONSTRAINT love_moods_couple_fk FOREIGN KEY (couple_id) REFERENCES couples(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS love_notes (
+  id           CHAR(36) NOT NULL DEFAULT (UUID()),
+  couple_id    CHAR(36) NOT NULL,
+  sender_id    CHAR(36) NOT NULL,
+  recipient_id CHAR(36) NOT NULL,
+  note_type    VARCHAR(40) NOT NULL,
+  message      VARCHAR(280) NULL,
+  is_read      TINYINT(1) NOT NULL DEFAULT 0,
+  read_at      DATETIME NULL,
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY love_notes_recipient_idx (recipient_id, is_read),
+  KEY love_notes_couple_idx (couple_id, created_at),
+  CONSTRAINT love_notes_couple_fk FOREIGN KEY (couple_id) REFERENCES couples(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS open_when_letters (
+  id           CHAR(36) NOT NULL DEFAULT (UUID()),
+  couple_id    CHAR(36) NOT NULL,
+  author_id    CHAR(36) NOT NULL,
+  recipient_id CHAR(36) NOT NULL,
+  occasion     VARCHAR(60) NOT NULL,
+  title        VARCHAR(160) NULL,
+  body         MEDIUMTEXT NOT NULL,
+  opened_at    DATETIME NULL,
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY open_when_couple_idx (couple_id),
+  KEY open_when_recipient_idx (recipient_id, occasion),
+  CONSTRAINT open_when_couple_fk FOREIGN KEY (couple_id) REFERENCES couples(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS story_milestones (
+  id           CHAR(36) NOT NULL DEFAULT (UUID()),
+  couple_id    CHAR(36) NOT NULL,
+  created_by   CHAR(36) NOT NULL,
+  title        VARCHAR(160) NOT NULL,
+  happened_on  DATE NULL,
+  description  TEXT NULL,
+  emoji        VARCHAR(8) NULL,
+  location     VARCHAR(160) NULL,
+  image_bucket VARCHAR(40) NULL,
+  image_path   VARCHAR(255) NULL,
+  sort_order   INT NOT NULL DEFAULT 0,
+  created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY story_couple_idx (couple_id, happened_on),
+  CONSTRAINT story_couple_fk FOREIGN KEY (couple_id) REFERENCES couples(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS gratitude_notes (
+  id         CHAR(36) NOT NULL DEFAULT (UUID()),
+  couple_id  CHAR(36) NOT NULL,
+  user_id    CHAR(36) NOT NULL,
+  message    VARCHAR(500) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY gratitude_couple_idx (couple_id, created_at),
+  CONSTRAINT gratitude_couple_fk FOREIGN KEY (couple_id) REFERENCES couples(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS bucket_list_items (
+  id         CHAR(36) NOT NULL DEFAULT (UUID()),
+  couple_id  CHAR(36) NOT NULL,
+  created_by CHAR(36) NOT NULL,
+  title      VARCHAR(200) NOT NULL,
+  category   VARCHAR(40) NULL,
+  emoji      VARCHAR(8) NULL,
+  is_done    TINYINT(1) NOT NULL DEFAULT 0,
+  done_at    DATETIME NULL,
+  sort_order INT NOT NULL DEFAULT 0,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY bucket_couple_idx (couple_id, is_done),
+  CONSTRAINT bucket_couple_fk FOREIGN KEY (couple_id) REFERENCES couples(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- FINAL STEP — make yourself an administrator.
 -- Sign up in the app first, then run this with your own email address.
 -- ============================================================================
 -- UPDATE profiles SET role = 'superadmin' WHERE email = 'you@example.com';
+
+-- ---------------------------------------------------------------------------
+-- LOVE & CARE (emotional layer) — see database/mysql/love-care.sql
+-- ---------------------------------------------------------------------------
