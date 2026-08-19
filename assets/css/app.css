@@ -628,3 +628,129 @@ details.accordion .accordion-body { padding: 0 1.1rem 1.1rem; color: hsl(var(--m
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
+
+/* ============================================================================
+   Love & Care — the emotional layer
+   ========================================================================== */
+.gap-lg { gap: 1.25rem; }
+.link-btn { background:none; border:0; padding:0; color:hsl(var(--primary)); cursor:pointer;
+  font: inherit; text-decoration: underline; }
+
+.love-hero {
+  border-radius: var(--radius);
+  padding: 1.5rem 1.75rem;
+  background: linear-gradient(135deg, hsl(347 80% 96%), hsl(341 100% 97%) 55%, hsl(30 60% 96%));
+  border: 1px solid hsl(var(--border));
+  box-shadow: var(--shadow);
+}
+:root[data-theme="dark"] .love-hero {
+  background: linear-gradient(135deg, hsl(347 40% 16%), hsl(330 30% 13%) 60%, hsl(280 30% 14%));
+}
+.love-eyebrow { font-size:.8rem; letter-spacing:.04em; text-transform:uppercase; color:hsl(var(--muted-fg)); margin:0; }
+.love-hero h1 { font-family: var(--font-display); margin:.15rem 0 .75rem; font-size:1.9rem; }
+.love-weather { display:flex; align-items:center; gap:.75rem; }
+.love-weather-emoji { font-size:2.25rem; line-height:1; }
+.love-weather-label { font-weight:700; font-size:1.05rem; }
+
+.love-stat .stat-value { font-size:1.5rem; }
+.love-card { overflow:hidden; }
+
+/* Feeling + need chips */
+.feeling-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(5.2rem,1fr)); gap:.5rem; }
+.feeling-chip { position:relative; display:flex; flex-direction:column; align-items:center; gap:.25rem;
+  padding:.6rem .3rem; border:1px solid hsl(var(--border)); border-radius:var(--radius);
+  cursor:pointer; text-align:center; transition:.15s; background:hsl(var(--card)); }
+.feeling-chip:hover { border-color:hsl(var(--primary)); transform:translateY(-1px); }
+.feeling-chip input { position:absolute; opacity:0; }
+.feeling-chip:has(input:checked) { border-color:hsl(var(--primary)); background:hsl(var(--accent)); box-shadow:0 0 0 2px hsl(var(--primary)/.25); }
+.feeling-emoji { font-size:1.6rem; line-height:1; }
+.feeling-label { font-size:.72rem; color:hsl(var(--muted-fg)); }
+
+.need-grid { display:flex; flex-wrap:wrap; gap:.4rem; }
+.need-chip { cursor:pointer; }
+.need-chip input { position:absolute; opacity:0; }
+.need-chip span { display:inline-block; padding:.4rem .7rem; border:1px solid hsl(var(--border));
+  border-radius:999px; font-size:.85rem; transition:.15s; }
+.need-chip:has(input:checked) span { border-color:hsl(var(--primary)); background:hsl(var(--accent)); color:hsl(var(--accent-fg)); font-weight:600; }
+
+/* Send a little love */
+.love-send-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; }
+.love-send-btn { display:flex; flex-direction:column; align-items:center; gap:.25rem; padding:.7rem .3rem;
+  border:1px solid hsl(var(--border)); border-radius:var(--radius); background:hsl(var(--card)); cursor:pointer;
+  transition:.15s; }
+.love-send-btn:hover:not([disabled]) { border-color:hsl(var(--primary)); background:hsl(var(--accent)); transform:translateY(-2px); }
+.love-send-btn[disabled] { opacity:.45; cursor:not-allowed; }
+.love-send-emoji { font-size:1.5rem; line-height:1; }
+.love-send-label { font-size:.7rem; color:hsl(var(--muted-fg)); text-align:center; }
+
+.partner-feeling { display:flex; gap:.9rem; align-items:flex-start; }
+.partner-feeling-emoji { font-size:2.4rem; line-height:1; }
+
+/* Received love notes */
+.love-inbox { display:flex; flex-direction:column; gap:.5rem; }
+.love-received { display:flex; align-items:center; gap:.8rem; padding:.7rem .9rem; border-radius:var(--radius);
+  border:1px solid hsl(var(--border)); }
+.love-received.is-new { border-color:hsl(var(--primary)); background:hsl(var(--accent)); }
+.love-received-emoji { font-size:1.7rem; line-height:1; }
+.love-received-body { flex:1; }
+
+.gratitude-note { padding:.6rem .8rem; border-left:3px solid hsl(var(--primary)); background:hsl(var(--muted)/.5);
+  border-radius:.4rem; }
+
+/* Jump-off cards */
+.love-link-card { display:flex; flex-direction:column; gap:.3rem; padding:1.2rem; text-decoration:none;
+  color:inherit; transition:.15s; align-items:flex-start; }
+.love-link-card:hover { transform:translateY(-3px); box-shadow:var(--shadow-lg); border-color:hsl(var(--primary)); }
+.love-link-emoji { font-size:2rem; }
+
+/* Open when… letters */
+.letter-writing { font-family: var(--font-display); line-height:1.7; }
+.letter { border:1px solid hsl(var(--border)); border-radius:var(--radius); padding:1.1rem 1.2rem; }
+.letter.is-sealed { background:
+  repeating-linear-gradient(45deg, hsl(var(--accent)) 0 10px, hsl(var(--card)) 10px 20px); }
+.letter.is-open { background:hsl(var(--card)); box-shadow:var(--shadow); }
+.letter-occasion { font-weight:700; display:flex; align-items:center; gap:.4rem; margin-bottom:.5rem; }
+.letter-emoji { font-size:1.3rem; }
+.letter-title { font-family:var(--font-display); font-size:1.15rem; font-weight:700; margin:.2rem 0; }
+.letter-body { font-family:var(--font-display); line-height:1.75; }
+.letter-sealed-note { font-size:.85rem; color:hsl(var(--muted-fg)); margin:.3rem 0 .8rem; }
+.letter.just-opened { animation: letterReveal .6s ease; }
+@keyframes letterReveal { from { opacity:.2; transform:scale(.97) } to { opacity:1; transform:none } }
+
+/* Our Story timeline */
+.emoji-pick, .emoji-pick .emoji-opt { }
+.emoji-pick { display:flex; flex-wrap:wrap; gap:.35rem; }
+.emoji-opt input { position:absolute; opacity:0; }
+.emoji-opt span { display:inline-flex; width:2.2rem; height:2.2rem; align-items:center; justify-content:center;
+  border:1px solid hsl(var(--border)); border-radius:.5rem; font-size:1.2rem; cursor:pointer; }
+.emoji-opt:has(input:checked) span { border-color:hsl(var(--primary)); background:hsl(var(--accent)); }
+
+.story-timeline { position:relative; padding-left:2.4rem; }
+.story-timeline::before { content:""; position:absolute; left:1.05rem; top:.5rem; bottom:.5rem; width:2px;
+  background:linear-gradient(hsl(var(--primary)), hsl(var(--border))); }
+.story-node { position:relative; margin-bottom:1.1rem; }
+.story-dot { position:absolute; left:-2.4rem; width:2.2rem; height:2.2rem; border-radius:50%;
+  background:hsl(var(--card)); border:2px solid hsl(var(--primary)); display:flex; align-items:center;
+  justify-content:center; font-size:1.1rem; z-index:1; }
+.story-card { overflow:hidden; }
+.story-photo { width:100%; max-height:15rem; object-fit:cover; display:block; }
+.story-title { font-family:var(--font-display); font-size:1.15rem; font-weight:700; }
+.story-today .story-card-today { padding:.6rem 0; }
+
+/* Bucket list */
+.bucket-suggestions { display:flex; flex-wrap:wrap; gap:.5rem; }
+.bucket-suggestion { padding:.5rem .85rem; border:1px dashed hsl(var(--border)); border-radius:999px;
+  background:hsl(var(--card)); cursor:pointer; font-size:.9rem; transition:.15s; }
+.bucket-suggestion:hover { border-color:hsl(var(--primary)); background:hsl(var(--accent)); }
+.bucket-list { display:flex; flex-direction:column; gap:.15rem; }
+.bucket-item { display:flex; align-items:center; gap:.7rem; padding:.6rem .4rem; border-bottom:1px solid hsl(var(--border)); }
+.bucket-item:last-child { border-bottom:0; }
+.bucket-item.is-done .bucket-title { opacity:.55; text-decoration:line-through; }
+.bucket-check { background:none; border:0; font-size:1.3rem; cursor:pointer; line-height:1; }
+.bucket-title { flex:1; }
+.bucket-emoji { margin-right:.3rem; }
+
+@media (max-width: 640px) {
+  .love-send-grid { grid-template-columns:repeat(3,1fr); }
+  .feeling-grid { grid-template-columns:repeat(auto-fill,minmax(4.4rem,1fr)); }
+}

@@ -47,6 +47,14 @@ $partner = $context['partner'] ?? null;
           <li><a href="/dashboard" class="<?= Request::path() === '/dashboard' ? 'is-active' : '' ?>"><?= View::icon('chart') ?> Overview</a></li>
         </ul>
 
+        <p class="side-heading">Love &amp; care</p>
+        <ul class="side-nav">
+          <li><a href="/dashboard/love" class="<?= View::active('/dashboard/love') ?>"><?= View::icon('heart') ?> Love &amp; care</a></li>
+          <li><a href="/dashboard/letters" class="<?= View::active('/dashboard/letters') ?>"><?= View::icon('mail') ?> Open when… letters</a></li>
+          <li><a href="/dashboard/story" class="<?= View::active('/dashboard/story') ?>"><?= View::icon('star') ?> Our Story</a></li>
+          <li><a href="/dashboard/bucket" class="<?= View::active('/dashboard/bucket') ?>"><?= View::icon('globe') ?> Bucket list</a></li>
+        </ul>
+
         <p class="side-heading">Relationship</p>
         <ul class="side-nav">
           <li><a href="/dashboard/fairness" class="<?= View::active('/dashboard/fairness') ?>"><?= View::icon('scale') ?> Fairness report</a></li>
