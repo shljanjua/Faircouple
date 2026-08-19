@@ -23,7 +23,14 @@ spl_autoload_register(static function (string $class): void {
 require_once APP_PATH . '/core/Config.php';
 
 // --------------------------------------------------------------- Configuration
-Config::load(APP_PATH . '/config.php');
+// config.php is NOT in version control, so a deploy never overwrites your
+// credentials. On the very first run it is created from config.example.php;
+// after that git leaves your edited copy untouched on every future deploy.
+$configFile = APP_PATH . '/config.php';
+if (!is_file($configFile) && is_file(APP_PATH . '/config.example.php')) {
+    @copy(APP_PATH . '/config.example.php', $configFile);
+}
+Config::load($configFile);
 
 date_default_timezone_set((string) Config::get('timezone', 'UTC'));
 mb_internal_encoding('UTF-8');

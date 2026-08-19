@@ -37,12 +37,20 @@ final class Config
         return self::get('env', 'production') !== 'production';
     }
 
-    /** True while config.php still holds its shipped placeholder values. */
+    /**
+     * True while config.php still holds its shipped placeholder values, or has
+     * not been created/filled at all. Catches the empty case too, so a missing
+     * or unwritable config.php shows the setup page instead of a raw DB error.
+     */
     public static function needsSetup(): bool
     {
         $db = (array) self::get('db', []);
-        return ($db['password'] ?? '') === 'PUT-YOUR-MYSQL-PASSWORD-HERE'
-            || str_starts_with(self::key(), 'CHANGE-THIS');
+        $password = (string) ($db['password'] ?? '');
+
+        return $password === ''
+            || $password === 'PUT-YOUR-MYSQL-PASSWORD-HERE'
+            || str_starts_with(self::key(), 'CHANGE-THIS')
+            || self::key() === 'faircouples-insecure-development-key';
     }
 
     public static function uploadDir(): string
