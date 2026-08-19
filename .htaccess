@@ -28,6 +28,13 @@ DirectoryIndex index.php
 RedirectMatch 404 ^/app/
 RedirectMatch 404 ^/storage/
 
+# The repository ships as the web root, so its own metadata and the raw SQL
+# folder are present here too — none of it must ever be served to a visitor.
+RedirectMatch 404 ^/\.git
+RedirectMatch 404 ^/database/
+RedirectMatch 404 ^/\.github/
+RedirectMatch 404 ^/README\.md$
+
 <FilesMatch "\.(sql|md|json|lock|log|ini|yml|yaml|sh|bak)$">
   Require all denied
 </FilesMatch>

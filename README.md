@@ -11,33 +11,45 @@ SSH, no build step, no Composer. You upload files and import one SQL file.
 
 ---
 
-## What you actually upload
+## What you actually deploy
 
-Only the **`public_html/`** folder. Its contents go into your hosting account's
-`public_html`.
+**The whole repository, into your Hostinger `public_html`.** The repo root is the web
+root, so whether you use Hostinger's Git deploy (recommended — auto-pulls on every push)
+or upload manually, the files land directly where they belong. Nothing to move, nothing
+nested.
+
+> **Hostinger Git deployment:** hPanel → **Advanced → Git** → connect this repository,
+> set the branch, and deploy into `public_html`. Every push then updates the site
+> automatically, and your `app/config.php` (untracked) is left untouched.
 
 ```
-public_html/          ← upload the CONTENTS of this folder
+(repo root = your public_html)
 ├── index.php             front controller — every page routes through here
-├── .htaccess             routing, HTTPS, security headers
+├── .htaccess             routing, HTTPS, security headers, blocks .git/database
 ├── file.php              serves private uploads after checking session + couple
 ├── cron.php              the scheduled jobs
 ├── webhook-stripe.php    Stripe events
 ├── webhook-paypal.php    PayPal events
 ├── assets/               CSS, JS, icons
 ├── storage/uploads/      uploaded tickets and photos (must be writable)
+├── database/             the SQL files (blocked from the web; used only at import)
 └── app/
-    ├── config.php        THE ONLY FILE YOU EDIT
-    ├── core/             database, auth, storage, mail, payments, SEO
-    ├── domain/           fairness scoring, love-vs-attraction, itineraries
-    ├── pages/            one file per URL
-    └── views/            layouts and partials
+    ├── config.example.php  the template — copied to config.php on first run
+    ├── config.php          THE ONLY FILE YOU EDIT (created automatically, never in git)
+    ├── core/               database, auth, storage, mail, payments, SEO
+    ├── domain/             fairness scoring, love-vs-attraction, itineraries
+    ├── pages/              one file per URL
+    └── views/              layouts and partials
 ```
 
-> **Ignore `src/`, `package.json`, `next.config.mjs`, `node_modules/` and the other
-> Next.js files in this repository.** They are from an earlier version and are not used
-> by the running site. Do not upload them. Nothing outside `public_html/` and
-> `database/` is needed to run FairCouples.
+> **`config.php` is never in version control.** On the first request it is created
+> automatically from `config.example.php`, and because git does not track it, **your
+> credentials survive every future deploy** — a `git pull` or auto-deploy never
+> overwrites them. Edit `app/config.php`, not `config.example.php`.
+
+> The `.git`, `.github`, `database/` folders and `README.md` sit in the web root too
+> (because the repo root is the web root), but `.htaccess` returns 404 for all of them,
+> so none is ever served to a visitor.
 
 ---
 
@@ -75,8 +87,10 @@ duplicating them. It works on both MySQL 8 and MariaDB.
 
 ### 3. Edit `app/config.php`
 
-This is the only file you touch. In hPanel → **Files → File Manager**, open
-`public_html/app/config.php` and set four things:
+The first time the site loads, `app/config.php` is created automatically from
+`app/config.example.php`. Open it once in hPanel → **Files → File Manager** →
+`public_html/app/config.php` and set four things (this file is not tracked by git, so it
+is never overwritten on a later deploy):
 
 ```php
 'db' => [
@@ -267,7 +281,7 @@ no build.
 Most often the database password has a typo, or the SQL was imported into a different
 database than the one in `app/config.php`.
 
-**Uploads fail.** Set `public_html/storage/uploads` to permission 755 in File Manager.
+**Uploads fail.** Set `storage/uploads` (inside `public_html`) to permission 755 in File Manager.
 
 **No emails arrive.** Admin → Email & SMTP → **Verify connection**. The delivery log at
 the bottom of that page records the reason for every failure.
