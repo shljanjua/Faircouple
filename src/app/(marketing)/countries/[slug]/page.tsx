@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { createClient } from '@/lib/supabase/server';
+import { getCountryBySlug, getDestinations } from '@/lib/queries';
+import { query } from '@/lib/db';
 import { buildMetadata, breadcrumbSchema, faqSchema } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
 import { Badge, Card, Stat } from '@/components/ui';
@@ -10,16 +11,7 @@ import { formatMoney } from '@/lib/currency';
 
 export const revalidate = 3600;
 
-async function getCountry(slug: string) {
-  const supabase = createClient();
-  const { data } = await supabase
-    .from('countries')
-    .select('*')
-    .eq('slug', slug)
-    .eq('is_active', true)
-    .maybeSingle();
-  return data as any;
-}
+const getCountry = getCountryBySlug;
 
 export async function generateMetadata({
   params,
@@ -49,24 +41,14 @@ export default async function CountryPage({ params }: { params: { slug: string }
   const country = await getCountry(params.slug);
   if (!country) notFound();
 
-  const supabase = createClient();
-  const [{ data: destinations }, { data: neighbours }] = await Promise.all([
-    supabase
-      .from('destinations')
-      .select('*')
-      .eq('country_code', country.code)
-      .eq('is_active', true)
-      .order('popularity', { ascending: false }),
-    supabase
-      .from('countries')
-      .select('name, slug, flag_emoji, avg_daily_cost_usd')
-      .eq('region', country.region)
-      .neq('code', country.code)
-      .eq('is_active', true)
-      .limit(6),
+  const [list, neighbours] = await Promise.all([
+    getDestinations({ countryCode: country.code, limit: 60 }),
+    query<any>(
+      `SELECT name, slug, flag_emoji, avg_daily_cost_usd FROM countries
+        WHERE region = ? AND code <> ? AND is_active = 1 LIMIT 6`,
+      [country.region, country.code]
+    ),
   ]);
-
-  const list = (destinations ?? []) as any[];
 
   const faqs = [
     {
@@ -215,7 +197,7 @@ export default async function CountryPage({ params }: { params: { slug: string }
                 <Card className="p-5">
                   <h2 className="font-semibold">Nearby in {country.region}</h2>
                   <ul className="mt-3 space-y-2">
-                    {(neighbours as any[]).map((neighbour) => (
+                    {neighbours.map((neighbour) => (
                       <li key={neighbour.slug}>
                         <Link
                           href={`/countries/${neighbour.slug}`}

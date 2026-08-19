@@ -9,7 +9,7 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { getGateway } from '@/lib/payments';
 import { getAllSettings, settingString } from '@/lib/settings';
 import { buildMetadata } from '@/lib/seo';
@@ -24,74 +24,57 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AdminDashboard() {
-  const supabase = createAdminClient();
   const monthStart = new Date();
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
+  const monthStartSql = monthStart.toISOString().slice(0, 19).replace('T', ' ');
 
-  const [
-    users,
-    newUsers,
-    couples,
-    activeSubs,
-    payments,
-    recentUsers,
-    recentPayments,
-    contacts,
-    subscribers,
-    failedEmails,
-    settings,
-    stripe,
-    paypal,
-  ] = await Promise.all([
-    supabase.from('profiles').select('id', { count: 'exact', head: true }),
-    supabase
-      .from('profiles')
-      .select('id', { count: 'exact', head: true })
-      .gte('created_at', monthStart.toISOString()),
-    supabase.from('couples').select('id', { count: 'exact', head: true }),
-    supabase
-      .from('subscriptions')
-      .select('id, amount_cents, currency, interval', { count: 'exact' })
-      .in('status', ['active', 'trialing']),
-    supabase
-      .from('payments')
-      .select('amount_cents, currency, status, created_at')
-      .eq('status', 'succeeded')
-      .gte('created_at', monthStart.toISOString()),
-    supabase
-      .from('profiles')
-      .select('id, email, full_name, country_code, currency, created_at, role')
-      .order('created_at', { ascending: false })
-      .limit(8),
-    supabase
-      .from('payments')
-      .select('id, amount_cents, currency, status, provider, created_at, billing_email')
-      .order('created_at', { ascending: false })
-      .limit(8),
-    supabase.from('contact_messages').select('id', { count: 'exact', head: true }).eq('status', 'new'),
-    supabase
-      .from('newsletter_subscribers')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'subscribed'),
-    supabase
-      .from('email_logs')
-      .select('id', { count: 'exact', head: true })
-      .eq('status', 'failed'),
-    getAllSettings(),
-    getGateway('stripe'),
-    getGateway('paypal'),
-  ]);
+  const [counts, activeSubs, payments, recentUsers, recentPayments, settings, stripe, paypal] =
+    await Promise.all([
+      query<{ metric: string; total: number }>(
+        `SELECT 'users' AS metric, COUNT(*) AS total FROM profiles WHERE deleted_at IS NULL
+         UNION ALL SELECT 'newUsers', COUNT(*) FROM profiles WHERE created_at >= ?
+         UNION ALL SELECT 'couples', COUNT(*) FROM couples
+         UNION ALL SELECT 'activeSubs', COUNT(*) FROM subscriptions WHERE status IN ('active','trialing')
+         UNION ALL SELECT 'contacts', COUNT(*) FROM contact_messages WHERE status = 'new'
+         UNION ALL SELECT 'subscribers', COUNT(*) FROM newsletter_subscribers WHERE status = 'subscribed'
+         UNION ALL SELECT 'failedEmails', COUNT(*) FROM email_logs WHERE status = 'failed'`,
+        [monthStartSql, monthStartSql]
+      ),
+      query<any>(
+        `SELECT amount_cents, currency, billing_interval FROM subscriptions
+          WHERE status IN ('active','trialing')`
+      ),
+      query<any>(
+        `SELECT amount_cents, currency FROM payments
+          WHERE status = 'succeeded' AND created_at >= ?`,
+        [monthStartSql]
+      ),
+      query<any>(
+        `SELECT id, email, full_name, country_code, currency, created_at, role
+           FROM profiles WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 8`
+      ),
+      query<any>(
+        `SELECT id, amount_cents, currency, status, provider, created_at, billing_email
+           FROM payments ORDER BY created_at DESC LIMIT 8`
+      ),
+      getAllSettings(),
+      getGateway('stripe'),
+      getGateway('paypal'),
+    ]);
 
-  const monthRevenue = (payments.data ?? []).reduce(
-    (sum: number, payment: any) => sum + (payment.amount_cents ?? 0),
+  const count = (metric: string) =>
+    Number(counts.find((row) => row.metric === metric)?.total ?? 0);
+
+  const monthRevenue = payments.reduce(
+    (sum: number, payment: any) => sum + Number(payment.amount_cents ?? 0),
     0
   );
 
-  const mrr = (activeSubs.data ?? []).reduce((sum: number, subscription: any) => {
-    const amount = subscription.amount_cents ?? 0;
-    if (subscription.interval === 'year') return sum + Math.round(amount / 12);
-    if (subscription.interval === 'lifetime') return sum;
+  const mrr = activeSubs.reduce((sum: number, subscription: any) => {
+    const amount = Number(subscription.amount_cents ?? 0);
+    if (subscription.billing_interval === 'year') return sum + Math.round(amount / 12);
+    if (subscription.billing_interval === 'lifetime') return sum;
     return sum + amount;
   }, 0);
 
@@ -134,25 +117,25 @@ export default async function AdminDashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="Total users"
-          value={users.count ?? 0}
-          hint={`${newUsers.count ?? 0} joined this month`}
+          value={count('users')}
+          hint={`${count('newUsers')} joined this month`}
           icon={<Users className="h-5 w-5" aria-hidden />}
         />
         <Stat
           label="Relationship spaces"
-          value={couples.count ?? 0}
+          value={count('couples')}
           icon={<Heart className="h-5 w-5" aria-hidden />}
         />
         <Stat
           label="Active subscriptions"
-          value={activeSubs.count ?? 0}
+          value={count('activeSubs')}
           hint={`MRR ≈ ${formatMoney(mrr, 'USD', { showDecimals: false })}`}
           icon={<TrendingUp className="h-5 w-5" aria-hidden />}
         />
         <Stat
           label="Revenue this month"
           value={formatMoney(monthRevenue, 'USD', { showDecimals: false })}
-          hint={`${(payments.data ?? []).length} successful payments`}
+          hint={`${payments.length} successful payments`}
           icon={<CreditCard className="h-5 w-5" aria-hidden />}
         />
       </div>
@@ -164,7 +147,7 @@ export default async function AdminDashboard() {
             New contact messages
           </span>
           <Link href="/admin/contacts" className="font-bold">
-            {contacts.count ?? 0}
+            {count('contacts')}
           </Link>
         </Card>
         <Card className="flex items-center justify-between p-4">
@@ -173,7 +156,7 @@ export default async function AdminDashboard() {
             Newsletter subscribers
           </span>
           <Link href="/admin/contacts" className="font-bold">
-            {subscribers.count ?? 0}
+            {count('subscribers')}
           </Link>
         </Card>
         <Card className="flex items-center justify-between p-4">
@@ -182,7 +165,7 @@ export default async function AdminDashboard() {
             Failed emails
           </span>
           <Link href="/admin/emails" className="font-bold">
-            {failedEmails.count ?? 0}
+            {count('failedEmails')}
           </Link>
         </Card>
       </div>
@@ -205,7 +188,7 @@ export default async function AdminDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {(recentUsers.data ?? []).map((profile: any) => (
+                {recentUsers.map((profile: any) => (
                   <tr key={profile.id}>
                     <Td>
                       <span className="font-medium">{profile.full_name ?? '—'}</span>
@@ -240,7 +223,7 @@ export default async function AdminDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {(recentPayments.data ?? []).map((payment: any) => (
+                {recentPayments.map((payment: any) => (
                   <tr key={payment.id}>
                     <Td>
                       <span className="text-xs">{payment.billing_email ?? '—'}</span>

@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { getCoupleContext, getSessionUser } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { PartnerWorkspace } from '@/components/app/partner-workspace';
@@ -25,12 +25,10 @@ export default async function PartnerPage() {
     );
   }
 
-  const supabase = createClient();
-  const { data: invitations } = await supabase
-    .from('couple_invitations')
-    .select('*')
-    .eq('couple_id', context.couple.id)
-    .order('created_at', { ascending: false });
+  const invitations = await query<any>(
+    `SELECT * FROM couple_invitations WHERE couple_id = ? ORDER BY created_at DESC`,
+    [context.couple.id]
+  );
 
   return (
     <PartnerWorkspace
@@ -46,7 +44,7 @@ export default async function PartnerPage() {
         incomeShare: member.income_share,
         joinedAt: member.joined_at,
       }))}
-      invitations={(invitations ?? []) as any[]}
+      invitations={invitations}
       meId={user!.id}
       isOwner={context.couple.owner_id === user!.id}
       siteUrl={SITE_URL}

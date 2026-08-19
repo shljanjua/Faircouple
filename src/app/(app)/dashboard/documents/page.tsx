@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { getCoupleContext } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { VaultWorkspace } from '@/components/app/vault-workspace';
@@ -23,26 +23,24 @@ export default async function DocumentsPage() {
     );
   }
 
-  const supabase = createClient();
-  const [{ data: documents }, { data: trips }] = await Promise.all([
-    supabase
-      .from('travel_documents')
-      .select('*')
-      .eq('couple_id', context.couple.id)
-      .order('depart_at', { ascending: true, nullsFirst: false }),
-    supabase
-      .from('trips')
-      .select('id, title')
-      .eq('couple_id', context.couple.id)
-      .neq('status', 'cancelled'),
+  const [documents, trips] = await Promise.all([
+    query<any>(
+      `SELECT * FROM travel_documents WHERE couple_id = ?
+        ORDER BY depart_at IS NULL ASC, depart_at ASC`,
+      [context.couple.id]
+    ),
+    query<{ id: string; title: string }>(
+      `SELECT id, title FROM trips WHERE couple_id = ? AND status <> 'cancelled'`,
+      [context.couple.id]
+    ),
   ]);
 
   return (
     <VaultWorkspace
       coupleId={context.couple.id}
       meId={context.me.user_id}
-      documents={(documents ?? []) as any[]}
-      trips={(trips ?? []) as any[]}
+      documents={documents}
+      trips={trips}
       currency={context.couple.currency}
     />
   );

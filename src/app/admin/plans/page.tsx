@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query, parseJson, toBool } from '@/lib/db';
 import { buildMetadata } from '@/lib/seo';
 import { PlansManager } from '@/components/admin/plans-manager';
 
@@ -10,11 +10,26 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AdminPlansPage() {
-  const supabase = createAdminClient();
-  const { data: plans } = await supabase
-    .from('plans')
-    .select('*, prices:plan_prices(*)')
-    .order('sort_order');
+  const [plans, prices] = await Promise.all([
+    query<any>(`SELECT * FROM plans ORDER BY sort_order ASC`),
+    query<any>(`SELECT * FROM plan_prices ORDER BY amount_cents ASC`),
+  ]);
 
-  return <PlansManager plans={(plans ?? []) as any[]} />;
+  const rows = plans.map((plan) => ({
+    ...plan,
+    is_active: toBool(plan.is_active),
+    is_featured: toBool(plan.is_featured),
+    is_free: toBool(plan.is_free),
+    features: parseJson<string[]>(plan.features, []),
+    limits: parseJson<Record<string, unknown>>(plan.limits, {}),
+    prices: prices
+      .filter((price) => price.plan_id === plan.id)
+      .map((price) => ({
+        ...price,
+        interval: price.billing_interval,
+        is_active: toBool(price.is_active),
+      })),
+  }));
+
+  return <PlansManager plans={rows} />;
 }

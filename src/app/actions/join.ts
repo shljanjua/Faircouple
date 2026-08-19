@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createClient } from '@/lib/supabase/server';
+import { execute, query, queryOne, uuid, nowSql } from '@/lib/db';
 import { getSessionUser } from '@/lib/auth';
 import { recordAudit } from '@/lib/audit';
 import type { ActionResult } from '@/app/actions/couple';
@@ -11,50 +11,41 @@ export async function joinByCodeAction(code: string, displayRole: string): Promi
   const user = await getSessionUser();
   if (!user) return { ok: false, error: 'Sign in first.' };
 
-  const supabase = createClient();
-  const { data: couple } = await supabase
-    .from('couples')
-    .select('id, name')
-    .eq('invite_code', code.toUpperCase())
-    .maybeSingle();
-
+  const couple = await queryOne<{ id: string; name: string | null }>(
+    `SELECT id, name FROM couples WHERE invite_code = ? LIMIT 1`,
+    [code.toUpperCase()]
+  );
   if (!couple) return { ok: false, error: 'That code does not match any space.' };
 
-  const { data: members } = await supabase
-    .from('couple_members')
-    .select('user_id')
-    .eq('couple_id', (couple as any).id)
-    .is('removed_at', null);
+  const members = await query<{ user_id: string }>(
+    `SELECT user_id FROM couple_members WHERE couple_id = ? AND removed_at IS NULL`,
+    [couple.id]
+  );
 
-  const list = (members ?? []) as any[];
-  if (list.some((member) => member.user_id === user.id)) {
+  if (members.some((member) => member.user_id === user.id)) {
     return { ok: true, message: 'You are already a member of this space.' };
   }
-  if (list.length >= 2) {
+  if (members.length >= 2) {
     return { ok: false, error: 'This space already has two members.' };
   }
 
-  const { error } = await supabase.from('couple_members').insert({
-    couple_id: (couple as any).id,
-    user_id: user.id,
-    member_role: 'partner',
-    display_role: displayRole || 'Partner B',
-  });
+  const joined = await execute(
+    `INSERT INTO couple_members (id, couple_id, user_id, member_role, display_role)
+     VALUES (?, ?, ?, 'partner', ?)
+     ON DUPLICATE KEY UPDATE removed_at = NULL, removed_by = NULL, display_role = VALUES(display_role)`,
+    [uuid(), couple.id, user.id, displayRole || 'Partner B']
+  );
+  if (!joined.ok) return { ok: false, error: joined.error ?? 'Could not join the space.' };
 
-  if (error) return { ok: false, error: error.message };
-
-  await supabase.from('couples').update({ status: 'active' }).eq('id', (couple as any).id);
-  await supabase
-    .from('profiles')
-    .update({ onboarded_at: new Date().toISOString() })
-    .eq('id', user.id);
+  await execute(`UPDATE couples SET status = 'active' WHERE id = ?`, [couple.id]);
+  await execute(`UPDATE profiles SET onboarded_at = ? WHERE id = ?`, [nowSql(), user.id]);
 
   await recordAudit({
     actorId: user.id,
     actorEmail: user.email,
     action: 'couple.join',
     entityType: 'couple',
-    entityId: (couple as any).id,
+    entityId: couple.id,
     summary: 'Joined via invite code',
   });
 

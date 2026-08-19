@@ -1,9 +1,10 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createClient } from '@/lib/supabase/server';
+import { execute, queryOne, uuid, toMysqlDateTime } from '@/lib/db';
 import { getSessionUser, getCoupleContext, getEntitlements } from '@/lib/auth';
 import { limitReached, upgradeMessage } from '@/lib/plans';
+import { deleteFile, fileUrl } from '@/lib/storage';
 import type { ActionResult } from '@/app/actions/couple';
 
 async function space() {
@@ -22,16 +23,18 @@ async function storageQuotaError(coupleId: string, incomingBytes: number): Promi
   const quotaMb = entitlements.limits.storage_mb;
   if (quotaMb === -1) return null;
 
-  const supabase = createClient();
-  const [{ data: media }, { data: documents }] = await Promise.all([
-    supabase.from('media_assets').select('size_bytes').eq('couple_id', coupleId),
-    supabase.from('travel_documents').select('file_size').eq('couple_id', coupleId),
+  const [media, documents] = await Promise.all([
+    queryOne<{ total: number }>(
+      `SELECT COALESCE(SUM(size_bytes), 0) AS total FROM media_assets WHERE couple_id = ?`,
+      [coupleId]
+    ),
+    queryOne<{ total: number }>(
+      `SELECT COALESCE(SUM(file_size), 0) AS total FROM travel_documents WHERE couple_id = ?`,
+      [coupleId]
+    ),
   ]);
 
-  const usedBytes =
-    ((media ?? []) as any[]).reduce((sum, row) => sum + Number(row.size_bytes ?? 0), 0) +
-    ((documents ?? []) as any[]).reduce((sum, row) => sum + Number(row.file_size ?? 0), 0);
-
+  const usedBytes = Number(media?.total ?? 0) + Number(documents?.total ?? 0);
   const quotaBytes = quotaMb * 1024 * 1024;
   if (usedBytes + incomingBytes <= quotaBytes) return null;
 
@@ -40,74 +43,85 @@ async function storageQuotaError(coupleId: string, incomingBytes: number): Promi
 }
 
 /**
- * Records an uploaded booking document. The file itself is uploaded straight
- * from the browser to Supabase Storage under `<couple_id>/<user_id>/…`, so
- * large PDFs never pass through the Next.js server.
+ * Records an uploaded booking document. The file itself is written to disk by
+ * POST /api/upload under `documents/<couple_id>/<user_id>/…`; this action only
+ * stores the metadata row that points at it.
  */
 export async function saveTravelDocumentAction(formData: FormData): Promise<ActionResult> {
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Create your relationship space first.' };
 
   const documentId = String(formData.get('id') ?? '');
-  const supabase = createClient();
+  const title = String(formData.get('title') ?? '').trim();
+  if (!title) return { ok: false, error: 'Give the document a title.' };
 
   if (!documentId) {
     const entitlements = await getEntitlements();
-    const { count } = await supabase
-      .from('travel_documents')
-      .select('id', { count: 'exact', head: true })
-      .eq('couple_id', ctx.context.couple.id);
-    if (limitReached(entitlements.limits, 'documents', count ?? 0)) {
+    const row = await queryOne<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM travel_documents WHERE couple_id = ?`,
+      [ctx.context.couple.id]
+    );
+    if (limitReached(entitlements.limits, 'documents', Number(row?.total ?? 0))) {
       return { ok: false, error: upgradeMessage('documents') };
     }
   }
 
   const incomingBytes = Number(formData.get('file_size') ?? 0);
-  if (incomingBytes > 0) {
+  if (incomingBytes > 0 && !documentId) {
     const quotaError = await storageQuotaError(ctx.context.couple.id, incomingBytes);
     if (quotaError) return { ok: false, error: quotaError };
   }
 
-  const payload = {
-    couple_id: ctx.context.couple.id,
-    user_id: ctx.user.id,
-    trip_id: String(formData.get('trip_id') ?? '') || null,
-    doc_type: String(formData.get('doc_type') ?? 'other'),
-    title: String(formData.get('title') ?? '').trim(),
-    provider: String(formData.get('provider') ?? '').trim() || null,
-    confirmation_code: String(formData.get('confirmation_code') ?? '').trim() || null,
-    booking_reference: String(formData.get('booking_reference') ?? '').trim() || null,
-    passenger_names: String(formData.get('passenger_names') ?? '').trim() || null,
-    origin: String(formData.get('origin') ?? '').trim() || null,
-    destination: String(formData.get('destination') ?? '').trim() || null,
-    depart_at: String(formData.get('depart_at') ?? '') || null,
-    arrive_at: String(formData.get('arrive_at') ?? '') || null,
-    check_in: String(formData.get('check_in') ?? '') || null,
-    check_out: String(formData.get('check_out') ?? '') || null,
-    seat: String(formData.get('seat') ?? '').trim() || null,
-    terminal: String(formData.get('terminal') ?? '').trim() || null,
-    gate: String(formData.get('gate') ?? '').trim() || null,
-    amount_cents: formData.get('amount')
-      ? Math.round(Number(formData.get('amount')) * 100)
-      : null,
-    currency: String(formData.get('currency') ?? ctx.context.couple.currency),
-    expires_at: String(formData.get('expires_at') ?? '') || null,
-    file_path: String(formData.get('file_path') ?? '') || null,
-    file_name: String(formData.get('file_name') ?? '') || null,
-    file_mime: String(formData.get('file_mime') ?? '') || null,
-    file_size: formData.get('file_size') ? Number(formData.get('file_size')) : null,
-    notes: String(formData.get('notes') ?? '').trim() || null,
-    is_shared: formData.get('is_shared') !== 'false',
-    updated_at: new Date().toISOString(),
-  };
+  const values = [
+    String(formData.get('trip_id') ?? '') || null,
+    String(formData.get('doc_type') ?? 'other'),
+    title,
+    String(formData.get('provider') ?? '').trim() || null,
+    String(formData.get('confirmation_code') ?? '').trim() || null,
+    String(formData.get('booking_reference') ?? '').trim() || null,
+    String(formData.get('passenger_names') ?? '').trim() || null,
+    String(formData.get('origin') ?? '').trim() || null,
+    String(formData.get('destination') ?? '').trim() || null,
+    toMysqlDateTime(String(formData.get('depart_at') ?? '') || null),
+    toMysqlDateTime(String(formData.get('arrive_at') ?? '') || null),
+    String(formData.get('check_in') ?? '') || null,
+    String(formData.get('check_out') ?? '') || null,
+    String(formData.get('seat') ?? '').trim() || null,
+    String(formData.get('terminal') ?? '').trim() || null,
+    String(formData.get('gate') ?? '').trim() || null,
+    formData.get('amount') ? Math.round(Number(formData.get('amount')) * 100) : null,
+    String(formData.get('currency') ?? ctx.context.couple.currency),
+    String(formData.get('expires_at') ?? '') || null,
+    String(formData.get('file_path') ?? '') || null,
+    String(formData.get('file_name') ?? '') || null,
+    String(formData.get('file_mime') ?? '') || null,
+    formData.get('file_size') ? Number(formData.get('file_size')) : null,
+    String(formData.get('notes') ?? '').trim() || null,
+    formData.get('is_shared') !== 'false',
+  ];
 
-  if (!payload.title) return { ok: false, error: 'Give the document a title.' };
+  const result = documentId
+    ? await execute(
+        `UPDATE travel_documents
+            SET trip_id = ?, doc_type = ?, title = ?, provider = ?, confirmation_code = ?,
+                booking_reference = ?, passenger_names = ?, origin = ?, destination = ?,
+                depart_at = ?, arrive_at = ?, check_in = ?, check_out = ?, seat = ?, terminal = ?,
+                gate = ?, amount_cents = ?, currency = ?, expires_at = ?, file_path = ?,
+                file_name = ?, file_mime = ?, file_size = ?, notes = ?, is_shared = ?
+          WHERE id = ? AND couple_id = ?`,
+        [...values, documentId, ctx.context.couple.id]
+      )
+    : await execute(
+        `INSERT INTO travel_documents
+           (id, couple_id, user_id, trip_id, doc_type, title, provider, confirmation_code,
+            booking_reference, passenger_names, origin, destination, depart_at, arrive_at,
+            check_in, check_out, seat, terminal, gate, amount_cents, currency, expires_at,
+            file_path, file_name, file_mime, file_size, notes, is_shared)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [uuid(), ctx.context.couple.id, ctx.user.id, ...values]
+      );
 
-  const { error } = documentId
-    ? await supabase.from('travel_documents').update(payload).eq('id', documentId)
-    : await supabase.from('travel_documents').insert(payload);
-
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the document.' };
 
   revalidatePath('/dashboard/documents');
   return { ok: true, message: 'Saved to the vault.' };
@@ -117,36 +131,32 @@ export async function deleteTravelDocumentAction(documentId: string): Promise<Ac
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
 
-  const supabase = createClient();
-  const { data: doc } = await supabase
-    .from('travel_documents')
-    .select('file_path')
-    .eq('id', documentId)
-    .maybeSingle();
+  const doc = await queryOne<{ file_path: string | null }>(
+    `SELECT file_path FROM travel_documents WHERE id = ? AND couple_id = ? LIMIT 1`,
+    [documentId, ctx.context.couple.id]
+  );
+  if (!doc) return { ok: false, error: 'Document not found.' };
 
-  if ((doc as any)?.file_path) {
-    await supabase.storage.from('documents').remove([(doc as any).file_path]);
-  }
+  const result = await execute(`DELETE FROM travel_documents WHERE id = ? AND couple_id = ?`, [
+    documentId,
+    ctx.context.couple.id,
+  ]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the document.' };
 
-  const { error } = await supabase.from('travel_documents').delete().eq('id', documentId);
-  if (error) return { ok: false, error: error.message };
+  if (doc.file_path) await deleteFile('documents', doc.file_path);
 
   revalidatePath('/dashboard/documents');
   return { ok: true, message: 'Deleted.' };
 }
 
-/** Returns a short-lived signed URL so a private file can be opened. */
+/** Returns the authenticated URL a private file is served from. */
 export async function getDocumentUrlAction(path: string): Promise<ActionResult> {
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
   if (!path.startsWith(`${ctx.context.couple.id}/`)) {
     return { ok: false, error: 'That file does not belong to your space.' };
   }
-
-  const supabase = createClient();
-  const { data, error } = await supabase.storage.from('documents').createSignedUrl(path, 300);
-  if (error) return { ok: false, error: error.message };
-  return { ok: true, data: (data as any).signedUrl };
+  return { ok: true, data: fileUrl('documents', path) };
 }
 
 /* ------------------------------------------------------------- Photo gallery */
@@ -155,26 +165,33 @@ export async function saveMediaAssetAction(formData: FormData): Promise<ActionRe
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Create your relationship space first.' };
 
+  const path = String(formData.get('path') ?? '');
+  if (!path) return { ok: false, error: 'Upload a file first.' };
+
   const incomingBytes = Number(formData.get('size_bytes') ?? 0);
   const quotaError = await storageQuotaError(ctx.context.couple.id, incomingBytes);
   if (quotaError) return { ok: false, error: quotaError };
 
-  const supabase = createClient();
-  const { error } = await supabase.from('media_assets').insert({
-    couple_id: ctx.context.couple.id,
-    user_id: ctx.user.id,
-    bucket: 'couple-media',
-    path: String(formData.get('path') ?? ''),
-    file_name: String(formData.get('file_name') ?? 'photo'),
-    mime_type: String(formData.get('mime_type') ?? '') || null,
-    size_bytes: Number(formData.get('size_bytes') ?? 0),
-    kind: String(formData.get('kind') ?? 'photo'),
-    album: String(formData.get('album') ?? '').trim() || null,
-    caption: String(formData.get('caption') ?? '').trim() || null,
-    is_private: formData.get('is_private') === 'true',
-  });
+  const result = await execute(
+    `INSERT INTO media_assets
+       (id, couple_id, user_id, bucket, path, file_name, mime_type, size_bytes, kind, album, caption, is_private)
+     VALUES (?, ?, ?, 'couple-media', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      uuid(),
+      ctx.context.couple.id,
+      ctx.user.id,
+      path,
+      String(formData.get('file_name') ?? 'photo'),
+      String(formData.get('mime_type') ?? '') || null,
+      incomingBytes,
+      String(formData.get('kind') ?? 'photo'),
+      String(formData.get('album') ?? '').trim() || null,
+      String(formData.get('caption') ?? '').trim() || null,
+      formData.get('is_private') === 'true',
+    ]
+  );
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the photo.' };
   revalidatePath('/dashboard/gallery');
   return { ok: true, message: 'Uploaded.' };
 }
@@ -183,45 +200,52 @@ export async function deleteMediaAssetAction(assetId: string): Promise<ActionRes
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
 
-  const supabase = createClient();
-  const { data: asset } = await supabase
-    .from('media_assets')
-    .select('path, bucket')
-    .eq('id', assetId)
-    .maybeSingle();
+  const asset = await queryOne<{ path: string; bucket: string }>(
+    `SELECT path, bucket FROM media_assets WHERE id = ? AND couple_id = ? LIMIT 1`,
+    [assetId, ctx.context.couple.id]
+  );
+  if (!asset) return { ok: false, error: 'Photo not found.' };
 
-  if (asset) {
-    await supabase.storage
-      .from((asset as any).bucket ?? 'couple-media')
-      .remove([(asset as any).path]);
-  }
+  const result = await execute(`DELETE FROM media_assets WHERE id = ? AND couple_id = ?`, [
+    assetId,
+    ctx.context.couple.id,
+  ]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the photo.' };
 
-  const { error } = await supabase.from('media_assets').delete().eq('id', assetId);
-  if (error) return { ok: false, error: error.message };
+  await deleteFile(asset.bucket ?? 'couple-media', asset.path);
 
   revalidatePath('/dashboard/gallery');
   return { ok: true, message: 'Deleted.' };
 }
 
+/** Maps stored object paths to the authenticated URLs that serve them. */
 export async function getMediaUrlsAction(paths: string[]): Promise<ActionResult> {
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
 
-  const safe = paths.filter((path) => path.startsWith(`${ctx.context.couple.id}/`));
-  if (!safe.length) return { ok: true, data: {} };
-
-  const supabase = createClient();
-  const { data, error } = await supabase.storage
-    .from('couple-media')
-    .createSignedUrls(safe, 3600);
-
-  if (error) return { ok: false, error: error.message };
-
   const map: Record<string, string> = {};
-  for (const item of data ?? []) {
-    if ((item as any).path && (item as any).signedUrl) {
-      map[(item as any).path] = (item as any).signedUrl;
+  for (const path of paths) {
+    if (path.startsWith(`${ctx.context.couple.id}/`)) {
+      map[path] = fileUrl('couple-media', path);
     }
   }
   return { ok: true, data: map };
+}
+
+/** Toggles the favourite flag on a photo. */
+export async function toggleFavoriteMediaAction(
+  assetId: string,
+  favorite: boolean
+): Promise<ActionResult> {
+  const ctx = await space();
+  if (!ctx) return { ok: false, error: 'Not available.' };
+
+  const result = await execute(
+    `UPDATE media_assets SET is_favorite = ? WHERE id = ? AND couple_id = ?`,
+    [favorite, assetId, ctx.context.couple.id]
+  );
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not update the photo.' };
+  revalidatePath('/dashboard/gallery');
+  return { ok: true };
 }

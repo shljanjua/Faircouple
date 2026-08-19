@@ -87,7 +87,7 @@ export function FairnessWorkspace(props: Props) {
               category={category}
               entry={myEntries.get(category.id) ?? null}
               responses={props.responses.filter(
-                (r) => r.entry?.user_id === meId && r.entry?.category_id === category.id
+                (r) => r.user_id === meId && r.category_id === category.id
               )}
               period={props.period}
               partnerName={partnerName}

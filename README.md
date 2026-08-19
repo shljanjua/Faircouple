@@ -1,361 +1,270 @@
 # FairCouples
 
-**Enterprise subscription SaaS for relationship fairness, emotions, budgeting and travel planning.**
+A relationship fairness platform for couples and families. Both partners answer for
+themselves — privately, from wherever they are — and the app compares the two sides and
+reports whether the effort, respect and loyalty are actually balanced. It also decides
+whether a relationship is running on love or on attraction, splits money fairly, plans
+trips, and keeps every ticket and booking in one place.
 
-FairCouples measures what actually breaks relationships: imbalance. Each partner logs their own
-entries — privately, from anywhere in the world — and the platform compares the two sides, showing
-where effort, respect and loyalty are drifting apart. Around that sits everything a couple needs
-day to day: emotions, private messaging, fair money splitting, gifts, and full honeymoon/travel
-planning with an itinerary generator and a ticket vault.
-
-Built with **Next.js 14 (App Router) + TypeScript + Tailwind CSS + Supabase (PostgreSQL, Auth,
-Storage, Realtime)**, with **Stripe and PayPal** billing in five currencies and a complete admin
-panel.
+**Built to run on Hostinger shared hosting.** Pure PHP and MySQL. No Node.js, no VPS, no
+SSH, no build step, no Composer. You upload files and import one SQL file.
 
 ---
 
-## Contents
+## What you actually upload
 
-1. [What is included](#what-is-included)
-2. [Quick start](#quick-start)
-3. [Database setup](#database-setup-supabase)
-4. [Environment variables](#environment-variables)
-5. [Admin panel](#admin-panel)
-6. [Payments](#payments-stripe--paypal)
-7. [Email / SMTP](#email--smtp)
-8. [SEO](#seo)
-9. [Deployment](#deployment)
-10. [Scheduled jobs](#scheduled-jobs)
-11. [Hostinger MySQL](#hostinger-mysql)
-12. [Project structure](#project-structure)
-13. [Security model](#security-model)
+Only the **`public_html/`** folder. Its contents go into your hosting account's
+`public_html`.
 
----
-
-## What is included
-
-### The fairness engine
-- **Ten areas**, thirty specific behaviours, each with a *fair rule*:
-  emotional connection · communication · respect & boundaries · trust & loyalty ·
-  financial fairness · time & attention · conflict management · affection & care ·
-  growth & future alignment · deal breakers.
-- Both partners score **themselves and each other**, independently, every week.
-- **Balance index (0–100)** for whether effort is even, plus a weighted overall score.
-- **Perception gaps** — where what you said about yourself differs from what your partner said
-  about you. That gap is usually the real argument.
-- 12-week trend line, risk levels (healthy / watch / strained / critical), narrative insights,
-  and a weekly report emailed to both partners.
-- Works for any two-person relationship: partners, spouses, **a mother and son**, siblings,
-  friends. Each member gets their own role label and their own entries.
-
-### Emotions
-- 30 emotions across positive / neutral / difficult, each with intensity 1–10.
-- Scope: about **me**, about **my partner**, or about **the relationship**.
-- Trigger and “what I need right now” fields, private mode, partner acknowledgement,
-  30-day mood chart comparing both partners.
-
-### Compatibility
-- **Love vs Attraction assessment** (20 questions, public and free) — separates consistency from
-  intensity and tells you which one your data actually describes.
-- Eight-dimension compatibility radar, scored by both partners and compared.
-
-### Together
-- Real-time **private messaging** with photos, 40 smileys, 6 reactions and read receipts.
-- Shared **photo gallery** with signed, expiring URLs.
-- **Gift planner** with surprise mode (hidden from the recipient until given) and wishlists.
-- 15 **checklist templates**: weekly fairness ritual, conflict repair, monthly money talk,
-  date-night rotation, plus packing lists for every climate.
-
-### Money
-- Budgets (household, per-trip, event, gift) and expenses in five currencies.
-- **Equal or income-proportional splitting**, automatic “who owes whom”, one-tap settle up.
-- Category breakdown charts.
-
-### Travel
-- 45 countries and 50+ destination guides with real daily costs, best months, honeymoon scores
-  and attractions.
-- **Itinerary generator** — day-by-day plans from the destination's attractions, matched to pace
-  (relaxed / balanced / packed) and interests.
-- **Ticket vault** — flight tickets, hotel confirmations, trains, car rental, attraction passes,
-  insurance, visas and passports. Uploaded straight to private storage, reachable by both partners.
-- Climate-specific packing lists with items assigned per partner.
-
-### Business layer
-- 4 plans (Starter free · Essential · Premium · Lifetime), pricing in **USD, GBP, EUR, CAD, AUD**.
-- Currency is chosen at signup from the user's country and can be changed until they subscribe.
-- **One subscription covers both partners.**
-- Stripe (cards, Apple Pay, Google Pay) and PayPal, with verified webhooks and idempotency.
-- Plan limits enforced server-side on every write.
-
-### Admin panel (`/admin`)
-Dashboard · Users · Relationship spaces · Plans & pricing · Subscriptions · Payments & gateways ·
-Coupons · Blog · Legal pages · FAQ & testimonials · Destinations · SEO & redirects · Email & SMTP ·
-Inbox & subscribers · Settings & integrations · Audit log.
-
----
-
-## Quick start
-
-```bash
-git clone https://github.com/shljanjua/faircouple.git
-cd faircouple
-npm install
-cp .env.example .env.local     # then fill in the Supabase values
-npm run dev                    # http://localhost:3000
+```
+public_html/          ← upload the CONTENTS of this folder
+├── index.php             front controller — every page routes through here
+├── .htaccess             routing, HTTPS, security headers
+├── file.php              serves private uploads after checking session + couple
+├── cron.php              the scheduled jobs
+├── webhook-stripe.php    Stripe events
+├── webhook-paypal.php    PayPal events
+├── assets/               CSS, JS, icons
+├── storage/uploads/      uploaded tickets and photos (must be writable)
+└── app/
+    ├── config.php        THE ONLY FILE YOU EDIT
+    ├── core/             database, auth, storage, mail, payments, SEO
+    ├── domain/           fairness scoring, love-vs-attraction, itineraries
+    ├── pages/            one file per URL
+    └── views/            layouts and partials
 ```
 
-Scripts:
-
-| Command | What it does |
-| --- | --- |
-| `npm run dev` | Development server |
-| `npm run build` | Production build |
-| `npm start` | Serve the production build |
-| `npm run typecheck` | TypeScript, no emit |
-| `npm run lint` | ESLint (next/core-web-vitals) |
+> **Ignore `src/`, `package.json`, `next.config.mjs`, `node_modules/` and the other
+> Next.js files in this repository.** They are from an earlier version and are not used
+> by the running site. Do not upload them. Nothing outside `public_html/` and
+> `database/` is needed to run FairCouples.
 
 ---
 
-## Database setup (Supabase)
+## Install — about fifteen minutes
 
-1. Create a project at [supabase.com](https://supabase.com).
-2. Open **SQL Editor** and run these files **in order** — paste the contents of each and press Run:
+### 1. Create the database
 
-   | Order | File | What it creates |
-   | --- | --- | --- |
-   | 1 | `supabase/migrations/0001_schema.sql` | 50+ tables, functions, triggers, indexes |
-   | 2 | `supabase/migrations/0002_rls.sql` | Row Level Security on every table |
-   | 3 | `supabase/migrations/0003_seed.sql` | Fairness framework, emotions, plans & prices, 45 countries, 50+ destinations, attractions, 15 checklist templates, blog posts, legal pages, FAQs, email templates, settings |
-   | 4 | `supabase/migrations/0004_storage.sql` | Storage buckets + object policies |
-   | 5 | `supabase/migrations/0005_admin_bootstrap.sql` | Promotes your account to superadmin — **edit the email first**, and run it after you have signed up |
+hPanel → **Databases → MySQL Databases**. Create a database and a user, and note the
+password — it is the only thing you cannot look up again later.
 
-3. **Authentication → URL Configuration**
-   - Site URL: `https://your-domain.com`
-   - Redirect URLs: `https://your-domain.com/auth/callback`, `http://localhost:3000/auth/callback`
-4. **Authentication → Providers → Email**: enable “Confirm email”.
-5. Copy the project URL and both API keys into your environment.
+The app ships pointed at database `u237845628_Faircouple` with user
+`u237845628_Faircouple`. If yours are named differently, that is fine; you will set them
+in step 3.
 
-> The app never queries with the service-role key from the browser. Every user-facing query runs
-> under RLS with the anon key.
+### 2. Import the schema and content
 
----
+hPanel → **Databases → phpMyAdmin** → select your database → **Import** → choose
+`database/mysql/faircouples-mysql.sql` → **Import**.
 
-## Environment variables
+That one file creates all 65 tables and fills them with everything the site needs to
+work on day one:
 
-Copy `.env.example` to `.env.local` (and set the same values in your host):
+| | |
+|---|---|
+| 10 fairness areas, 30 behaviours | the full checklist, with each area's "Fair Rule" |
+| 30 emotions | for the daily check-ins |
+| 4 plans, 27 prices | across USD, GBP, EUR, CAD and AUD |
+| 45 countries, 54 destinations, 33 attractions | the travel catalogue and itinerary source |
+| 14 packing checklists | flights, honeymoon, ski, beach, road trip and more |
+| 8 legal pages, 6 blog posts, 14 FAQs, 6 testimonials | real content, editable in the admin panel |
+| 10 email templates, 65 settings | signup confirmation, invites, resets, receipts |
 
-| Variable | Required | Notes |
-| --- | --- | --- |
-| `NEXT_PUBLIC_SITE_URL` | yes | Canonicals, sitemap, OG tags, checkout redirects |
-| `NEXT_PUBLIC_SUPABASE_URL` | yes | Supabase → Settings → API |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | yes | Public key, RLS-protected |
-| `SUPABASE_SERVICE_ROLE_KEY` | yes | Server-only: webhooks, admin actions. Never expose it |
-| `STRIPE_SECRET_KEY` | optional | Can be set in Admin → Payments instead |
-| `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | optional | " |
-| `STRIPE_WEBHOOK_SECRET` | optional | " |
-| `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` / `PAYPAL_WEBHOOK_ID` | optional | " |
-| `PAYPAL_ENV` | optional | `sandbox` or `live` |
-| `CRON_SECRET` | optional | Protects `/api/cron` |
+The import is safe to run twice — re-importing updates the seed rows instead of
+duplicating them. It works on both MySQL 8 and MariaDB.
 
-Gateway credentials stored in the admin panel take priority over environment variables, so you can
-rotate keys without a redeploy.
+### 3. Edit `app/config.php`
 
----
+This is the only file you touch. In hPanel → **Files → File Manager**, open
+`public_html/app/config.php` and set four things:
 
-## Admin panel
+```php
+'db' => [
+    'name'     => 'u237845628_Faircouple',   // your database name
+    'user'     => 'u237845628_Faircouple',   // your database user
+    'password' => 'the password from step 1',
+],
 
-1. Sign up through the app with the email you want as admin.
-2. Edit the email in `supabase/migrations/0005_admin_bootstrap.sql` and run it.
-3. Visit `/admin`.
+'site_url' => 'https://your-domain.com',     // no trailing slash
 
-The dashboard opens with a **setup checklist** that tells you exactly what is still unconfigured
-(no payment gateway, no SMTP, no analytics, maintenance mode left on).
+'app_key'     => 'sixty or more random characters',
+'cron_secret' => 'another random string',
+```
 
-Everything below is editable without touching code:
+Leave `'host' => 'localhost'` alone — that is correct on Hostinger.
 
-- **Users** — role, status, suspension reason, manual plan grants, one-time support sign-in links,
-  deletion.
-- **Relationship spaces** — see both members, and remove either one (for example when one partner
-  subscribed and asks for the other to be removed). Removal is immediate and audited.
-- **Plans & pricing** — create packages, edit feature lists, edit the limits JSON, and publish
-  prices per currency and interval with optional Stripe/PayPal IDs.
-- **Payments** — enable/disable gateways, switch test/live, paste keys (secrets are write-only and
-  never sent back to the browser), review every transaction and every webhook delivery.
-- **Content** — blog with full on-page SEO fields, legal pages, FAQ (feeds the FAQPage schema),
-  testimonials.
-- **SEO** — per-route metadata, redirects, and a summary of the technical SEO that is already live.
-- **Email** — SMTP credentials, all 10 transactional templates, test sends, delivery log.
-- **Settings** — brand, currencies, GA4, GTM, Meta Pixel, Google Ads, AdSense, Clarity, Hotjar,
-  TikTok, Pinterest, LinkedIn, cookie banner, social profiles, tax and maintenance mode.
-- **Audit log** — every admin action with actor, IP and user agent.
+### 4. Open your site
 
----
+Visit your domain. If anything is missing, you get a **setup page** that checks each
+requirement in turn — PHP version, the MySQL connection, whether the tables imported,
+whether the upload folder is writable — and tells you which one failed. It never prints
+your password. Once every check passes, the setup page disappears on its own.
 
-## Payments (Stripe & PayPal)
+### 5. Create your admin account
 
-### Stripe
-1. Admin → Payments → Stripe: paste the publishable key, secret key and webhook secret; set the
-   mode; enable it.
-2. In Stripe → Developers → Webhooks, add `https://your-domain.com/api/webhooks/stripe` and
-   subscribe to:
-   `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`,
-   `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `charge.refunded`.
-3. Prices are created on the fly from your plan pricing, or you can paste existing Stripe price IDs
-   per currency in Admin → Plans.
+Sign up through the site normally, then in phpMyAdmin → **SQL**:
 
-### PayPal
-1. Create a REST app at developer.paypal.com.
-2. Admin → Payments → PayPal: paste the client ID, secret and webhook ID.
-3. Add the webhook `https://your-domain.com/api/webhooks/paypal`.
+```sql
+UPDATE profiles SET role = 'superadmin' WHERE email = 'you@your-domain.com';
+```
 
-Signatures are verified for both providers, every event is stored in `webhook_events`, and repeat
-deliveries are ignored idempotently.
+Sign out and back in. **Admin panel** now appears in your account menu.
+
+### 6. Set up the cron job
+
+hPanel → **Advanced → Cron Jobs**. Add one job, every 15 minutes:
+
+```
+curl -s "https://your-domain.com/cron.php?key=YOUR_CRON_SECRET&job=all" > /dev/null
+```
+
+Use the same `cron_secret` you set in step 3. This sends the weekly fairness reports,
+expires stale invitations and subscriptions, and clears out old sessions.
 
 ---
 
-## Email / SMTP
+## Then finish it from the admin panel
 
-Admin → Email. For Hostinger mailboxes:
+Everything below is configured at `/admin` — no file editing, no redeploy.
 
-| Field | Value |
-| --- | --- |
-| Host | `smtp.hostinger.com` |
-| Port | `465` (SSL on) or `587` (SSL off) |
-| Username | the full mailbox address |
-| From | the same mailbox |
+| Screen | What you set |
+|---|---|
+| **Settings → Brand** | Site name, tagline, description, company details, social profiles |
+| **Settings → Currency** | Default currency, which currencies you sell in, tax, trial length |
+| **Settings → Accounts** | Open or close signups, require email confirmation |
+| **Settings → Analytics** | GA4, Tag Manager, Meta Pixel, Google Ads, AdSense, Clarity, Hotjar, TikTok, Pinterest, LinkedIn, cookie banner |
+| **Settings → Features** | Feature flags and maintenance mode |
+| **Settings → Security** | Change your admin password; see your active sessions |
+| **Email & SMTP** | Your mailbox, all 10 templates, a connection test and a real test send |
+| **Payments** | Stripe and PayPal keys, live/test mode, manual bank transfer |
+| **Plans & pricing** | Create plans, set every per-feature limit, price them per currency |
+| **Coupons** | Percentage or fixed discounts, with expiry and redemption caps |
+| **Users / Relationship spaces** | Add, disable or delete any member; remove either partner from a space |
+| **Blog / Pages** | Posts and legal pages, each with full SEO fields |
+| **FAQ & testimonials** | Feeds the accordion and the FAQPage / Review structured data |
+| **Destinations** | The travel catalogue the itinerary generator reads |
+| **SEO & redirects** | Per-URL titles and meta, verification tokens, 301s |
+| **Inbox & subscribers** | Contact messages with replies, newsletter list, CSV export |
+| **Audit log** | Every administrative change, with who and from where |
 
-Use **Verify connection** and **Send test email** before going live. Templates: welcome/verify,
-partner invite, password reset, subscription activated, payment failed, weekly fairness report,
-partner entry, trip reminder, removed from a couple, contact auto-reply.
+### Email
+
+Hostinger gives you mailboxes with your plan. hPanel → **Emails → Email Accounts →
+Connect Devices** shows your host, port and credentials. Put them into **Admin → Email &
+SMTP**, press **Verify connection**, then **Send test**. Until this is done, signup
+confirmations, partner invitations and password resets cannot be sent — the admin panel
+shows a warning saying so, and every attempt is recorded in the delivery log with the
+reason it failed.
+
+### Payments
+
+Register these two webhook URLs so subscriptions activate automatically:
+
+| Provider | URL |
+|---|---|
+| Stripe → Developers → Webhooks | `https://your-domain.com/webhook-stripe.php` |
+| PayPal → Apps → Webhooks | `https://your-domain.com/webhook-paypal.php` |
+
+Both signatures are verified and both handlers are idempotent, so a replayed or repeated
+delivery cannot double-charge or double-activate.
+
+---
+
+## What the product does
+
+**The fairness report.** Ten areas, thirty behaviours. Each partner scores their own
+effort and their read of their partner's, plus respect, loyalty and satisfaction. The
+report gives a balance index, a weighted overall score, a per-area breakdown marked
+balanced or tilted, and a plain-language verdict that names who is carrying more. Each
+partner can see the other's scores — that is the point — while notes stay private to
+whoever wrote them. Every area shows its Fair Rule.
+
+**Love or attraction.** Twenty questions across two axes. Attraction is measured in peaks
+(intensity, novelty, jealousy, the highs and lows); love in averages (consistency,
+repair after conflict, mutual effort, concrete plans). The result separates
+`love_with_spark`, `love`, `infatuation`, `attraction_led`, `balanced` and `early`, and
+gives guidance for the one you got. It works without an account, so it can bring people
+in from search.
+
+**Compatibility.** Eight dimensions, scored by each partner independently, reported with
+the biggest gap called out.
+
+**Money.** Shared budgets, expenses split by share or by income, settlements, gifts and
+wishlists. Currency follows the account's country — USD, GBP, EUR, CAD or AUD — and is
+also offered on the signup page.
+
+**Travel.** Trips, a day-by-day itinerary generator across three paces, packing lists
+from 14 templates, and a document vault for flight, hotel and attraction tickets.
+Uploads are stored outside the web root and served only through `file.php` after the
+session and couple membership are checked; the real file type is sniffed from content,
+never trusted from the browser.
+
+**Private messaging.** Between the two partners only, with photo sharing and emoji, and
+new messages arriving without a page refresh.
+
+**One subscription covers both.** When either partner subscribes, both get the full plan.
 
 ---
 
 ## SEO
 
-Already implemented, no plugin required:
+- Titles, meta descriptions, canonical URLs and Open Graph on every page, all overridable
+  per URL from the admin panel
+- 10 JSON-LD schema types: Organization, WebSite, BreadcrumbList, FAQPage, BlogPosting,
+  Product, SoftwareApplication, TouristDestination, HowTo and Review
+- A sitemap index plus three child sitemaps, updating themselves as you add content
+- `robots.txt` generated from your settings, with a one-switch "block all search engines"
+  for before launch
+- Verification tokens for Google, Bing, Pinterest and Yandex
+- 301/302 redirects with hit counts, so you can change a URL without losing its rankings
 
-- Per-page `<title>`, meta description, keywords, canonical, OpenGraph and Twitter cards.
-- **JSON-LD**: Organization, WebSite (+ SearchAction), SoftwareApplication with AggregateOffer and
-  AggregateRating, BreadcrumbList, FAQPage, HowTo, BlogPosting, TouristDestination, Product,
-  ItemList.
-- `sitemap.xml` generated from the database — static routes, blog posts, destinations, countries and
-  CMS pages, with priorities and change frequencies.
-- `robots.txt` with per-crawler rules; `/admin`, `/dashboard` and `/api` are blocked.
-- Dynamic OG images at `/og` (1200×630).
-- Search Console, Bing, Yandex and Pinterest verification tokens from the admin panel.
-- Admin-managed 301/302 redirects.
-- An emergency site-wide no-index switch.
-- Semantic HTML, skip link, ARIA labelling, `text-wrap: balance`, responsive images with lazy
-  loading, and `next/font` self-hosting.
-
-Content is written around real search intent: honeymoon destination guides with costs, country
-guides, packing checklists, the fairness framework, and the Love vs Attraction test.
+Submit `https://your-domain.com/sitemap.xml` to Google Search Console and Bing Webmaster
+Tools once you are live.
 
 ---
 
-## Deployment
+## Security
 
-### Vercel (recommended)
-1. Import the GitHub repository.
-2. Add the environment variables.
-3. Add repository secrets `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` — pushes to `main`
-   then deploy automatically via `.github/workflows/deploy.yml`.
-
-### Hostinger VPS / any Node host
-```bash
-npm ci
-npm run build
-npm start          # respects $PORT, defaults to 3000
-```
-Put Nginx in front for TLS, and keep the process alive with PM2:
-```bash
-pm2 start "npm start" --name faircouples
-pm2 save
-```
-
-> Hostinger's *shared* hosting cannot run Next.js server rendering (it is PHP-only). Use a
-> Hostinger VPS, or host the app on Vercel and keep your domain and mailboxes at Hostinger.
-
-CI runs typecheck, lint and build on every push (`.github/workflows/ci.yml`).
+- Passwords hashed with bcrypt at cost 12; sign-in does a constant-time comparison even
+  for an unknown address, so it cannot be used to discover who has an account
+- Sessions are backed by a database row, so access can be revoked instantly — and is,
+  the moment an account is disabled, suspended or deleted
+- CSRF token checked on every POST, centrally, before any page code runs
+- Every database query is a prepared statement
+- MySQL has no row-level security, so every couple-scoped query filters on `couple_id`
+  in application code and every mutation checks ownership first
+- Uploads live outside the document root behind `Require all denied`, and are reachable
+  only through the membership-checked streamer
+- Stored content is escaped before the Markdown renderer runs, so a saved page or post
+  cannot inject a script
+- Payment keys and the SMTP password are write-only: the panel tells you whether one is
+  set, never what it is. Your database credentials stay in `app/config.php`, which is
+  404ed by `.htaccess` and is deliberately the one thing the admin panel cannot edit
+- Analytics and advertising tags wait for consent. Google tags load under Consent Mode v2
+  with every storage type denied; the other pixels are not loaded at all until the visitor
+  accepts
 
 ---
 
-## Scheduled jobs
+## Requirements
 
-`GET /api/cron?job=all` with `Authorization: Bearer $CRON_SECRET` runs:
+PHP 8.1 or newer with `pdo_mysql`, `curl`, `openssl`, `mbstring` and `fileinfo` — all
+standard on Hostinger — and MySQL 8 or MariaDB 10.4+. Nothing else. No Composer, no npm,
+no build.
 
-- `trip-reminders` — emails both partners 14, 7 and 1 days before departure
-- `weekly-reports` — Monday fairness report to both partners
-- `expire-invites` — marks stale invitations expired
+## Troubleshooting
 
-`.github/workflows/cron.yml` calls it daily at 08:00 UTC and weekly on Mondays. Vercel Cron or a
-Hostinger cron job calling the same URL works identically.
+**The setup page keeps showing.** One of its checks is failing; the page names which.
+Most often the database password has a typo, or the SQL was imported into a different
+database than the one in `app/config.php`.
 
----
+**Uploads fail.** Set `public_html/storage/uploads` to permission 755 in File Manager.
 
-## Hostinger MySQL
+**No emails arrive.** Admin → Email & SMTP → **Verify connection**. The delivery log at
+the bottom of that page records the reason for every failure.
 
-The application runs on Supabase (PostgreSQL). If you also want the schema in Hostinger's MySQL —
-for reporting, a replica, or a future migration — `database/mysql/faircouples-mysql.sql` is a
-complete MySQL 8.0 translation with the fairness framework, plans and pricing seeded.
+**A page 404s that should not.** Confirm `.htaccess` uploaded — File Manager hides
+dotfiles until you enable **Show hidden files**.
 
-Import it through **hPanel → Databases → phpMyAdmin → Import**. Note that MySQL has no Row Level
-Security, so any application built on it must scope every query by `couple_id` / `user_id` itself.
-
----
-
-## Project structure
-
-```
-src/
-├── app/
-│   ├── (marketing)/       Public site: home, features, fairness, destinations,
-│   │                      countries, blog, checklists, pricing, FAQ, contact,
-│   │                      CMS pages (legal, about)
-│   ├── (auth)/            Sign in, sign up, forgot/reset password, verify email
-│   ├── (app)/             Dashboard: fairness, emotions, check-in, compatibility,
-│   │                      checklists, messages, gallery, gifts, budget, travel,
-│   │                      documents, partner, billing, settings, checkout
-│   ├── admin/             Full admin panel
-│   ├── api/               Checkout, webhooks, contact, newsletter, cron
-│   ├── actions/           Server actions (couple, fairness, entries, money,
-│   │                      travel, vault, account, billing, admin)
-│   ├── auth/callback/     Supabase redirect handler
-│   ├── og/                Dynamic OpenGraph image
-│   ├── sitemap.ts robots.ts
-├── components/            ui/ · marketing/ · app/ · admin/ · analytics · providers
-├── lib/                   supabase/ · auth · fairness · assessment · itinerary ·
-│                          payments · email · settings · seo · currency · plans · utils
-└── types/
-supabase/migrations/       0001 schema · 0002 RLS · 0003 seed · 0004 storage · 0005 admin
-database/mysql/            MySQL 8.0 translation for Hostinger
-.github/workflows/         ci · deploy · cron
-```
-
----
-
-## Security model
-
-- **Row Level Security on every table.** A couple's data is reachable only by its two members and
-  by platform admins. Private entries are visible only to their author, and still count in that
-  author's own trends.
-- **Storage isolation** — private files live under `<couple_id>/<user_id>/…` and are served through
-  short-lived signed URLs. A storage policy checks membership on every read and write.
-- **Service-role key is server-only** and used exclusively by webhooks and verified admin actions.
-- **Webhooks verify signatures** (Stripe signing secret, PayPal verify-webhook-signature) and are
-  idempotent.
-- **Payment details never touch our servers** — Stripe and PayPal hold them.
-- **Secrets are write-only in the admin UI**: the panel reports whether a credential exists, never
-  its value.
-- **Audit log** records every admin action with actor, IP and user agent.
-- Security headers (HSTS, X-Frame-Options, X-Content-Type-Options, Referrer-Policy,
-  Permissions-Policy) are set in `next.config.mjs`.
-- GDPR: self-service data export and account deletion in Settings → Privacy.
-
----
-
-## Disclaimer
-
-FairCouples provides self-reported measurement and educational content. It is not therapy,
-counselling, or medical, legal or financial advice. If you are experiencing abuse, contact your
-local emergency service or a domestic abuse helpline.
+**Subscriptions do not activate after payment.** The webhook URL is missing or the signing
+secret is wrong. Admin → Payments lists recent deliveries and the error for each.

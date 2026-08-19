@@ -1,12 +1,11 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { createClient, createAdminClient } from '@/lib/supabase/server';
+import { execute, queryOne, uuid, toMysqlDateTime, nowSql } from '@/lib/db';
 import { getSessionUser, getCoupleContext } from '@/lib/auth';
 import { capturePaypalOrder, periodEnd } from '@/lib/payments';
-import { normalizeCurrency } from '@/lib/currency';
+import { normalizeCurrency, formatMoney } from '@/lib/currency';
 import { sendEmail } from '@/lib/email';
 import { recordAudit } from '@/lib/audit';
 import { SITE_URL } from '@/lib/seo';
-import { formatMoney } from '@/lib/currency';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,74 +33,90 @@ export async function GET(request: NextRequest) {
   const status = captured.order?.status;
   if (status !== 'COMPLETED') return fail(`PayPal returned status ${status}.`);
 
-  const supabase = createClient();
-  const admin = createAdminClient();
   const context = await getCoupleContext();
 
-  const { data: plan } = await supabase
-    .from('plans')
-    .select('*, prices:plan_prices(*)')
-    .eq('slug', planSlug)
-    .maybeSingle();
-
+  const plan = await queryOne<any>(`SELECT * FROM plans WHERE slug = ? LIMIT 1`, [planSlug]);
   if (!plan) return fail('Plan not found.');
 
-  const price = ((plan as any).prices ?? []).find(
-    (row: any) => row.currency === currency && row.interval === interval
+  const price = await queryOne<any>(
+    `SELECT * FROM plan_prices WHERE plan_id = ? AND currency = ? AND billing_interval = ? LIMIT 1`,
+    [plan.id, currency, interval]
   );
 
   const capture = captured.order?.purchase_units?.[0]?.payments?.captures?.[0];
   const amountCents = Math.round(Number(capture?.amount?.value ?? 0) * 100);
 
   const start = new Date();
-  const { data: subscription, error } = await admin
-    .from('subscriptions')
-    .upsert(
-      {
-        user_id: user.id,
-        couple_id: context?.couple.id ?? null,
-        plan_id: (plan as any).id,
-        price_id: price?.id ?? null,
-        provider: 'paypal',
-        provider_subscription_id: token,
-        provider_customer_id: captured.order?.payer?.payer_id ?? null,
-        status: 'active',
-        currency,
-        interval,
-        amount_cents: amountCents || price?.amount_cents || 0,
-        current_period_start: start.toISOString(),
-        current_period_end: periodEnd(interval, start).toISOString(),
-      },
-      { onConflict: 'provider,provider_subscription_id' }
-    )
-    .select('id')
-    .single();
+  const end = periodEnd(interval, start);
 
-  if (error) return fail(error.message);
+  const upsert = await execute(
+    `INSERT INTO subscriptions
+       (id, user_id, couple_id, plan_id, price_id, provider, provider_subscription_id,
+        provider_customer_id, status, currency, billing_interval, amount_cents,
+        current_period_start, current_period_end)
+     VALUES (?, ?, ?, ?, ?, 'paypal', ?, ?, 'active', ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       plan_id              = VALUES(plan_id),
+       price_id             = VALUES(price_id),
+       provider_customer_id = VALUES(provider_customer_id),
+       status               = 'active',
+       currency             = VALUES(currency),
+       billing_interval     = VALUES(billing_interval),
+       amount_cents         = VALUES(amount_cents),
+       current_period_start = VALUES(current_period_start),
+       current_period_end   = VALUES(current_period_end)`,
+    [
+      uuid(),
+      user.id,
+      context?.couple.id ?? null,
+      plan.id,
+      price?.id ?? null,
+      token,
+      captured.order?.payer?.payer_id ?? null,
+      currency,
+      interval,
+      amountCents || price?.amount_cents || 0,
+      toMysqlDateTime(start),
+      toMysqlDateTime(end),
+    ]
+  );
 
-  await admin.from('payments').insert({
-    user_id: user.id,
-    subscription_id: (subscription as any).id,
-    provider: 'paypal',
-    provider_payment_id: capture?.id ?? token,
-    amount_cents: amountCents,
-    currency,
-    status: 'succeeded',
-    description: `FairCouples ${(plan as any).name} — ${interval}`,
-    billing_email: captured.order?.payer?.email_address ?? user.email,
-    paid_at: new Date().toISOString(),
-    metadata: { order_id: token },
-  });
+  if (!upsert.ok) return fail(upsert.error ?? 'Could not activate your subscription.');
+
+  const subscription = await queryOne<{ id: string }>(
+    `SELECT id FROM subscriptions WHERE provider = 'paypal' AND provider_subscription_id = ? LIMIT 1`,
+    [token]
+  );
+
+  await execute(
+    `INSERT INTO payments
+       (id, user_id, subscription_id, provider, provider_payment_id, amount_cents, currency,
+        status, description, billing_email, paid_at, metadata)
+     VALUES (?, ?, ?, 'paypal', ?, ?, ?, 'succeeded', ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE status = 'succeeded', paid_at = VALUES(paid_at)`,
+    [
+      uuid(),
+      user.id,
+      subscription?.id ?? null,
+      capture?.id ?? token,
+      amountCents,
+      currency,
+      `FairCouples ${plan.name} — ${interval}`,
+      captured.order?.payer?.email_address ?? user.email,
+      nowSql(),
+      JSON.stringify({ order_id: token }),
+    ]
+  );
 
   await sendEmail({
     to: user.email,
     template: 'subscription-active',
     variables: {
       name: user.profile.full_name ?? 'there',
-      plan_name: (plan as any).name,
+      plan_name: plan.name,
       amount: formatMoney(amountCents, currency),
       currency,
-      next_billing_date: periodEnd(interval, start).toDateString(),
+      next_billing_date: end.toDateString(),
       invoice_url: `${SITE_URL}/dashboard/billing`,
     },
     userId: user.id,
@@ -112,7 +127,7 @@ export async function GET(request: NextRequest) {
     actorEmail: user.email,
     action: 'subscription.activate',
     entityType: 'subscription',
-    entityId: (subscription as any).id,
+    entityId: subscription?.id ?? token,
     summary: `PayPal payment captured for ${planSlug}`,
   });
 

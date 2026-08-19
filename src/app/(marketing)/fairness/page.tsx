@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Check } from 'lucide-react';
-import { createClient } from '@/lib/supabase/server';
+import { getFairnessCategories } from '@/lib/queries';
 import { buildMetadata, breadcrumbSchema, howToSchema } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
 import { ButtonLink } from '@/components/ui/button';
@@ -33,19 +33,7 @@ const CYCLE = [
 ];
 
 export default async function FairnessPage() {
-  const supabase = createClient();
-  const { data: categories } = await supabase
-    .from('fairness_categories')
-    .select('*, criteria:fairness_criteria(*)')
-    .eq('is_active', true)
-    .order('sort_order');
-
-  const list = ((categories ?? []) as any[]).map((category) => ({
-    ...category,
-    criteria: (category.criteria ?? []).sort(
-      (a: any, b: any) => (a.sort_order ?? 0) - (b.sort_order ?? 0)
-    ),
-  }));
+  const list = await getFairnessCategories();
 
   return (
     <>
@@ -122,7 +110,7 @@ export default async function FairnessPage() {
                     <p className="mt-1 text-sm text-muted-foreground">{category.description}</p>
 
                     <ul className="mt-4 space-y-2">
-                      {category.criteria.map((criterion: any) => (
+                      {(category.criteria ?? []).map((criterion: any) => (
                         <li key={criterion.id} className="flex gap-2.5">
                           <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden />
                           <span className="text-sm">

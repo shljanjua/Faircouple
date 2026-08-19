@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { limitOffset, query, queryOne } from '@/lib/db';
 import { buildMetadata } from '@/lib/seo';
 import { Card, Table, Td, Th } from '@/components/ui';
 import { formatDateTime } from '@/lib/utils';
@@ -15,22 +15,24 @@ export default async function AdminAuditPage({
 }: {
   searchParams: { page?: string };
 }) {
-  const supabase = createAdminClient();
   const page = Math.max(1, Number(searchParams.page ?? 1));
   const pageSize = 60;
 
-  const { data: logs, count } = await supabase
-    .from('audit_logs')
-    .select('*', { count: 'exact' })
-    .order('created_at', { ascending: false })
-    .range((page - 1) * pageSize, page * pageSize - 1);
+  const [logs, totalRow] = await Promise.all([
+    query<any>(
+      `SELECT * FROM audit_logs ORDER BY created_at DESC ${limitOffset(pageSize, (page - 1) * pageSize)}`
+    ),
+    queryOne<{ total: number }>(`SELECT COUNT(*) AS total FROM audit_logs`),
+  ]);
+
+  const count = Number(totalRow?.total ?? 0);
 
   return (
     <div className="space-y-6">
       <header>
         <h1 className="font-display text-2xl font-bold">Audit log</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          {count ?? 0} recorded actions. Every admin change, role grant, refund and deletion is
+          {count} recorded actions. Every admin change, role grant, refund and deletion is
           logged with the actor, IP address and user agent.
         </p>
       </header>
@@ -48,7 +50,7 @@ export default async function AdminAuditPage({
             </tr>
           </thead>
           <tbody>
-            {((logs ?? []) as any[]).map((log) => (
+            {logs.map((log) => (
               <tr key={log.id}>
                 <Td className="whitespace-nowrap text-muted-foreground">
                   {formatDateTime(log.created_at)}
@@ -66,7 +68,7 @@ export default async function AdminAuditPage({
           </tbody>
         </Table>
 
-        {(count ?? 0) > pageSize && (
+        {count > pageSize && (
           <nav className="mt-4 flex justify-between text-sm" aria-label="Pagination">
             {page > 1 ? (
               <a href={`/admin/audit?page=${page - 1}`} className="text-primary underline">
@@ -75,7 +77,7 @@ export default async function AdminAuditPage({
             ) : (
               <span />
             )}
-            {page * pageSize < (count ?? 0) && (
+            {page * pageSize < count && (
               <a href={`/admin/audit?page=${page + 1}`} className="text-primary underline">
                 Next
               </a>

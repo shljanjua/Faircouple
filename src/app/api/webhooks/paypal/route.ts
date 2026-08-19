@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { createAdminClient } from '@/lib/supabase/server';
+import { execute, queryOne, uuid, nowSql } from '@/lib/db';
 import { getGateway, paypalAccessToken } from '@/lib/payments';
 
 export const dynamic = 'force-dynamic';
@@ -55,90 +55,81 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  const supabase = createAdminClient();
+  const existing = await queryOne<{ status: string }>(
+    `SELECT status FROM webhook_events WHERE provider = 'paypal' AND event_id = ? LIMIT 1`,
+    [event.id]
+  );
 
-  const { data: existing } = await supabase
-    .from('webhook_events')
-    .select('status')
-    .eq('provider', 'paypal')
-    .eq('event_id', event.id)
-    .maybeSingle();
-
-  if ((existing as any)?.status === 'processed') {
+  if (existing?.status === 'processed') {
     return NextResponse.json({ received: true, duplicate: true });
   }
 
-  await supabase.from('webhook_events').upsert(
-    {
-      provider: 'paypal',
-      event_id: event.id,
-      event_type: event.event_type,
-      payload: event,
-      status: 'received',
-    },
-    { onConflict: 'provider,event_id' }
+  await execute(
+    `INSERT INTO webhook_events (id, provider, event_id, event_type, payload, status)
+     VALUES (?, 'paypal', ?, ?, ?, 'received')
+     ON DUPLICATE KEY UPDATE event_type = VALUES(event_type), payload = VALUES(payload), status = 'received'`,
+    [uuid(), event.id, event.event_type, JSON.stringify(event)]
   );
 
   try {
     switch (event.event_type) {
       case 'PAYMENT.CAPTURE.COMPLETED': {
-        const capture = event.resource;
-        await supabase
-          .from('payments')
-          .update({ status: 'succeeded', paid_at: new Date().toISOString() })
-          .eq('provider', 'paypal')
-          .eq('provider_payment_id', capture.id);
+        await execute(
+          `UPDATE payments SET status = 'succeeded', paid_at = ?
+            WHERE provider = 'paypal' AND provider_payment_id = ?`,
+          [nowSql(), event.resource.id]
+        );
         break;
       }
       case 'PAYMENT.CAPTURE.REFUNDED':
       case 'PAYMENT.CAPTURE.REVERSED': {
-        const capture = event.resource;
-        await supabase
-          .from('payments')
-          .update({ status: 'refunded' })
-          .eq('provider', 'paypal')
-          .eq('provider_payment_id', capture.id);
+        await execute(
+          `UPDATE payments SET status = 'refunded'
+            WHERE provider = 'paypal' AND provider_payment_id = ?`,
+          [event.resource.id]
+        );
         break;
       }
       case 'BILLING.SUBSCRIPTION.CANCELLED':
       case 'BILLING.SUBSCRIPTION.EXPIRED':
       case 'BILLING.SUBSCRIPTION.SUSPENDED': {
-        await supabase
-          .from('subscriptions')
-          .update({
-            status: event.event_type.includes('CANCELLED') ? 'canceled' : 'expired',
-            canceled_at: new Date().toISOString(),
-          })
-          .eq('provider', 'paypal')
-          .eq('provider_subscription_id', event.resource.id);
+        await execute(
+          `UPDATE subscriptions SET status = ?, canceled_at = ?
+            WHERE provider = 'paypal' AND provider_subscription_id = ?`,
+          [
+            String(event.event_type).includes('CANCELLED') ? 'canceled' : 'expired',
+            nowSql(),
+            event.resource.id,
+          ]
+        );
         break;
       }
       case 'BILLING.SUBSCRIPTION.ACTIVATED': {
-        await supabase
-          .from('subscriptions')
-          .update({ status: 'active' })
-          .eq('provider', 'paypal')
-          .eq('provider_subscription_id', event.resource.id);
+        await execute(
+          `UPDATE subscriptions SET status = 'active'
+            WHERE provider = 'paypal' AND provider_subscription_id = ?`,
+          [event.resource.id]
+        );
         break;
       }
       default:
         break;
     }
 
-    await supabase
-      .from('webhook_events')
-      .update({ status: 'processed', processed_at: new Date().toISOString() })
-      .eq('provider', 'paypal')
-      .eq('event_id', event.id);
+    await execute(
+      `UPDATE webhook_events SET status = 'processed', processed_at = ?
+        WHERE provider = 'paypal' AND event_id = ?`,
+      [nowSql(), event.id]
+    );
 
     return NextResponse.json({ received: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Handler failed';
-    await supabase
-      .from('webhook_events')
-      .update({ status: 'failed', error: message })
-      .eq('provider', 'paypal')
-      .eq('event_id', event.id);
+    await execute(
+      `UPDATE webhook_events SET status = 'failed', error = ?
+        WHERE provider = 'paypal' AND event_id = ?`,
+      [message, event.id]
+    );
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

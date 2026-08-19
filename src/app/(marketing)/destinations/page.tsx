@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
+import { getCountries, getDestinations } from '@/lib/queries';
 import { buildMetadata, breadcrumbSchema, absoluteUrl } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
 import { Badge, Card, SectionHeading } from '@/components/ui';
@@ -49,36 +49,22 @@ export default async function DestinationsPage({
 }: {
   searchParams: { type?: string; region?: string; budget?: string; q?: string };
 }) {
-  const supabase = createClient();
-
-  let query = supabase
-    .from('destinations')
-    .select('*, country:countries(name, slug, flag_emoji, region)')
-    .eq('is_active', true)
-    .order('popularity', { ascending: false })
-    .limit(120);
-
-  if (searchParams.type === 'honeymoon') query = query.eq('is_honeymoon', true);
-  else if (searchParams.type) query = query.eq('destination_type', searchParams.type);
-  if (searchParams.budget) query = query.eq('budget_level', searchParams.budget);
-  if (searchParams.q) query = query.ilike('name', `%${searchParams.q}%`);
-
-  const [{ data: destinations }, { data: countries }] = await Promise.all([
-    query,
-    supabase
-      .from('countries')
-      .select('code, name, slug, flag_emoji, region, avg_daily_cost_usd, summary, is_featured')
-      .eq('is_active', true)
-      .order('sort_order'),
+  const [destinations, countries] = await Promise.all([
+    getDestinations({
+      type: searchParams.type === 'honeymoon' ? undefined : searchParams.type,
+      honeymoonOnly: searchParams.type === 'honeymoon',
+      budget: searchParams.budget,
+      search: searchParams.q,
+    }),
+    getCountries(),
   ]);
 
-  let list = (destinations ?? []) as any[];
-  if (searchParams.region) {
-    list = list.filter((destination) => destination.country?.region === searchParams.region);
-  }
+  const list = searchParams.region
+    ? destinations.filter((destination) => destination.country?.region === searchParams.region)
+    : destinations;
 
   const regions = Array.from(
-    new Set(((countries ?? []) as any[]).map((country) => country.region).filter(Boolean))
+    new Set(countries.map((country) => country.region).filter(Boolean))
   ).sort();
 
   return (
@@ -253,7 +239,7 @@ export default async function DestinationsPage({
             description="Costs, seasons, visa notes and the best places for couples in each country."
           />
           <div className="mt-10 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {((countries ?? []) as any[]).map((country) => (
+            {countries.map((country) => (
               <Link
                 key={country.code}
                 href={`/countries/${country.slug}`}

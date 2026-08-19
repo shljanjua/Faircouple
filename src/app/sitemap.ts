@@ -1,5 +1,5 @@
 import type { MetadataRoute } from 'next';
-import { createClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { SITE_URL } from '@/lib/seo';
 
 export const dynamic = 'force-dynamic';
@@ -30,26 +30,16 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }));
 
   try {
-    const supabase = createClient();
-    const [{ data: posts }, { data: pages }, { data: destinations }, { data: countries }] =
-      await Promise.all([
-        supabase
-          .from('blog_posts')
-          .select('slug, updated_at, published_at')
-          .eq('status', 'published')
-          .eq('no_index', false),
-        supabase
-          .from('pages')
-          .select('slug, updated_at, no_index')
-          .eq('status', 'published'),
-        supabase
-          .from('destinations')
-          .select('slug, updated_at')
-          .eq('is_active', true),
-        supabase.from('countries').select('slug').eq('is_active', true),
-      ]);
+    const [posts, pages, destinations, countries] = await Promise.all([
+      query<any>(
+        `SELECT slug, updated_at, published_at FROM blog_posts WHERE status = 'published' AND no_index = 0`
+      ),
+      query<any>(`SELECT slug, updated_at, no_index FROM pages WHERE status = 'published'`),
+      query<any>(`SELECT slug, updated_at FROM destinations WHERE is_active = 1`),
+      query<any>(`SELECT slug FROM countries WHERE is_active = 1`),
+    ]);
 
-    for (const post of (posts ?? []) as any[]) {
+    for (const post of posts) {
       entries.push({
         url: `${SITE_URL}/blog/${post.slug}`,
         lastModified: new Date(post.updated_at ?? post.published_at ?? now),
@@ -58,8 +48,8 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       });
     }
 
-    for (const page of (pages ?? []) as any[]) {
-      if (page.no_index) continue;
+    for (const page of pages) {
+      if (page.no_index === 1) continue;
       entries.push({
         url: `${SITE_URL}/${page.slug}`,
         lastModified: new Date(page.updated_at ?? now),
@@ -68,7 +58,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       });
     }
 
-    for (const destination of (destinations ?? []) as any[]) {
+    for (const destination of destinations) {
       entries.push({
         url: `${SITE_URL}/destinations/${destination.slug}`,
         lastModified: new Date(destination.updated_at ?? now),
@@ -77,7 +67,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
       });
     }
 
-    for (const country of (countries ?? []) as any[]) {
+    for (const country of countries) {
       entries.push({
         url: `${SITE_URL}/countries/${country.slug}`,
         lastModified: now,

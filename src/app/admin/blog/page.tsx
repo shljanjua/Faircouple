@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query, parseJson } from '@/lib/db';
 import { buildMetadata } from '@/lib/seo';
 import { BlogManager } from '@/components/admin/blog-manager';
 
@@ -10,14 +10,18 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AdminBlogPage() {
-  const supabase = createAdminClient();
-  const [{ data: posts }, { data: categories }] = await Promise.all([
-    supabase
-      .from('blog_posts')
-      .select('*')
-      .order('published_at', { ascending: false, nullsFirst: false }),
-    supabase.from('blog_categories').select('*').order('sort_order'),
+  const [posts, categories] = await Promise.all([
+    query<any>(
+      `SELECT * FROM blog_posts ORDER BY published_at IS NULL, published_at DESC, created_at DESC`
+    ),
+    query<any>(`SELECT * FROM blog_categories ORDER BY sort_order ASC`),
   ]);
 
-  return <BlogManager posts={(posts ?? []) as any[]} categories={(categories ?? []) as any[]} />;
+  const rows = posts.map((post) => ({
+    ...post,
+    tags: parseJson<string[]>(post.tags, []),
+    keywords: parseJson<string[]>(post.keywords, []),
+  }));
+
+  return <BlogManager posts={rows} categories={categories} />;
 }

@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createClient } from '@/lib/supabase/server';
+import { execute, query, queryOne, uuid, nowSql, parseJson } from '@/lib/db';
 import { getSessionUser, getCoupleContext, getEntitlements } from '@/lib/auth';
 import { limitReached, upgradeMessage } from '@/lib/plans';
 import { generateItinerary, estimateCost, type Pace } from '@/lib/itinerary';
@@ -14,21 +14,51 @@ async function space() {
   return { user, context };
 }
 
+/** Confirms a trip belongs to the caller's space. */
+async function ownsTrip(tripId: string, coupleId: string) {
+  const row = await queryOne<{ id: string }>(
+    `SELECT id FROM trips WHERE id = ? AND couple_id = ? LIMIT 1`,
+    [tripId, coupleId]
+  );
+  return Boolean(row);
+}
+
+async function ownsItineraryItem(itemId: string, coupleId: string) {
+  const row = await queryOne<{ id: string }>(
+    `SELECT i.id FROM itinerary_items i
+       JOIN itinerary_days d ON d.id = i.day_id
+       JOIN itineraries it ON it.id = d.itinerary_id
+      WHERE i.id = ? AND it.couple_id = ? LIMIT 1`,
+    [itemId, coupleId]
+  );
+  return Boolean(row);
+}
+
+async function ownsPackingItem(itemId: string, coupleId: string) {
+  const row = await queryOne<{ id: string }>(
+    `SELECT i.id FROM packing_items i
+       JOIN packing_lists l ON l.id = i.list_id
+      WHERE i.id = ? AND l.couple_id = ? LIMIT 1`,
+    [itemId, coupleId]
+  );
+  return Boolean(row);
+}
+
 export async function saveTripAction(formData: FormData): Promise<ActionResult> {
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Create your relationship space first.' };
 
   const tripId = String(formData.get('id') ?? '');
-  const supabase = createClient();
+  const title = String(formData.get('title') ?? '').trim();
+  if (!title) return { ok: false, error: 'Give the trip a title.' };
 
   if (!tripId) {
     const entitlements = await getEntitlements();
-    const { count } = await supabase
-      .from('trips')
-      .select('id', { count: 'exact', head: true })
-      .eq('couple_id', ctx.context.couple.id)
-      .neq('status', 'cancelled');
-    if (limitReached(entitlements.limits, 'trips', count ?? 0)) {
+    const row = await queryOne<{ total: number }>(
+      `SELECT COUNT(*) AS total FROM trips WHERE couple_id = ? AND status <> 'cancelled'`,
+      [ctx.context.couple.id]
+    );
+    if (limitReached(entitlements.limits, 'trips', Number(row?.total ?? 0))) {
       return { ok: false, error: upgradeMessage('trips') };
     }
   }
@@ -38,55 +68,69 @@ export async function saveTripAction(formData: FormData): Promise<ActionResult> 
   let coverImage = String(formData.get('cover_image') ?? '') || null;
 
   if (destinationId) {
-    const { data: destination } = await supabase
-      .from('destinations')
-      .select('country_code, hero_image')
-      .eq('id', destinationId)
-      .maybeSingle();
+    const destination = await queryOne<{ country_code: string; hero_image: string | null }>(
+      `SELECT country_code, hero_image FROM destinations WHERE id = ? LIMIT 1`,
+      [destinationId]
+    );
     if (destination) {
-      countryCode = countryCode ?? (destination as any).country_code;
-      coverImage = coverImage ?? (destination as any).hero_image;
+      countryCode = countryCode ?? destination.country_code;
+      coverImage = coverImage ?? destination.hero_image;
     }
   }
 
-  const payload = {
-    couple_id: ctx.context.couple.id,
-    destination_id: destinationId,
-    country_code: countryCode,
-    title: String(formData.get('title') ?? '').trim(),
-    trip_type: String(formData.get('trip_type') ?? 'vacation'),
-    status: String(formData.get('status') ?? 'planning'),
-    start_date: String(formData.get('start_date') ?? '') || null,
-    end_date: String(formData.get('end_date') ?? '') || null,
-    travelers: Number(formData.get('travelers') ?? 2),
-    budget_cents: formData.get('budget')
-      ? Math.round(Number(formData.get('budget')) * 100)
-      : null,
-    currency: String(formData.get('currency') ?? ctx.context.couple.currency),
-    cover_image: coverImage,
-    notes: String(formData.get('notes') ?? '').trim() || null,
-    created_by: ctx.user.id,
-  };
+  const values = [
+    destinationId,
+    countryCode,
+    title,
+    String(formData.get('trip_type') ?? 'vacation'),
+    String(formData.get('status') ?? 'planning'),
+    String(formData.get('start_date') ?? '') || null,
+    String(formData.get('end_date') ?? '') || null,
+    Number(formData.get('travelers') ?? 2),
+    formData.get('budget') ? Math.round(Number(formData.get('budget')) * 100) : null,
+    String(formData.get('currency') ?? ctx.context.couple.currency),
+    coverImage,
+    String(formData.get('notes') ?? '').trim() || null,
+  ];
 
-  if (!payload.title) return { ok: false, error: 'Give the trip a title.' };
+  let savedId = tripId;
 
-  const { data, error } = tripId
-    ? await supabase.from('trips').update(payload).eq('id', tripId).select('id').single()
-    : await supabase.from('trips').insert(payload).select('id').single();
-
-  if (error) return { ok: false, error: error.message };
+  if (tripId) {
+    const result = await execute(
+      `UPDATE trips
+          SET destination_id = ?, country_code = ?, title = ?, trip_type = ?, status = ?,
+              start_date = ?, end_date = ?, travelers = ?, budget_cents = ?, currency = ?,
+              cover_image = ?, notes = ?
+        WHERE id = ? AND couple_id = ?`,
+      [...values, tripId, ctx.context.couple.id]
+    );
+    if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the trip.' };
+  } else {
+    savedId = uuid();
+    const result = await execute(
+      `INSERT INTO trips
+         (id, couple_id, destination_id, country_code, title, trip_type, status, start_date,
+          end_date, travelers, budget_cents, currency, cover_image, notes, created_by)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [savedId, ctx.context.couple.id, ...values, ctx.user.id]
+    );
+    if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the trip.' };
+  }
 
   revalidatePath('/dashboard/travel');
-  return { ok: true, message: 'Trip saved.', data: (data as any).id };
+  return { ok: true, message: 'Trip saved.', data: savedId };
 }
 
 export async function deleteTripAction(tripId: string): Promise<ActionResult> {
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
 
-  const supabase = createClient();
-  const { error } = await supabase.from('trips').delete().eq('id', tripId);
-  if (error) return { ok: false, error: error.message };
+  const result = await execute(`DELETE FROM trips WHERE id = ? AND couple_id = ?`, [
+    tripId,
+    ctx.context.couple.id,
+  ]);
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the trip.' };
   revalidatePath('/dashboard/travel');
   return { ok: true, message: 'Trip deleted.' };
 }
@@ -104,111 +148,112 @@ export async function generateItineraryAction(formData: FormData): Promise<Actio
   const tripId = String(formData.get('trip_id') ?? '');
   if (!tripId) return { ok: false, error: 'Missing trip.' };
 
-  const supabase = createClient();
-  const { data: trip } = await supabase
-    .from('trips')
-    .select('*, destination:destinations(*)')
-    .eq('id', tripId)
-    .maybeSingle();
-
+  const trip = await queryOne<any>(`SELECT * FROM trips WHERE id = ? AND couple_id = ? LIMIT 1`, [
+    tripId,
+    ctx.context.couple.id,
+  ]);
   if (!trip) return { ok: false, error: 'Trip not found.' };
 
-  const destination = (trip as any).destination;
-  if (!destination) {
+  if (!trip.destination_id) {
     return { ok: false, error: 'Pick a destination for this trip first.' };
   }
 
-  const { data: attractions } = await supabase
-    .from('attractions')
-    .select('*')
-    .eq('destination_id', destination.id)
-    .order('sort_order');
+  const destination = await queryOne<any>(`SELECT * FROM destinations WHERE id = ? LIMIT 1`, [
+    trip.destination_id,
+  ]);
+  if (!destination) return { ok: false, error: 'Pick a destination for this trip first.' };
 
-  const startDate = (trip as any).start_date as string | null;
-  const endDate = (trip as any).end_date as string | null;
+  const attractions = await query<any>(
+    `SELECT * FROM attractions WHERE destination_id = ? ORDER BY sort_order ASC`,
+    [destination.id]
+  );
+
+  const startDate = trip.start_date ? new Date(trip.start_date) : null;
+  const endDate = trip.end_date ? new Date(trip.end_date) : null;
 
   const daysFromDates =
     startDate && endDate
-      ? Math.ceil(
-          (new Date(endDate).getTime() - new Date(startDate).getTime()) / 86400000
-        ) + 1
+      ? Math.ceil((endDate.getTime() - startDate.getTime()) / 86400000) + 1
       : null;
 
   const requestedDays = Number(formData.get('days'));
-  const days = Math.max(
-    1,
-    Math.min(21, requestedDays > 0 ? requestedDays : (daysFromDates ?? 5))
-  );
+  const days = Math.max(1, Math.min(21, requestedDays > 0 ? requestedDays : (daysFromDates ?? 5)));
 
   const interests = String(formData.get('interests') ?? '')
     .split(',')
-    .map((i) => i.trim())
+    .map((interest) => interest.trim())
     .filter(Boolean);
+
+  const pace = String(formData.get('pace') ?? 'balanced') as Pace;
 
   const plan = generateItinerary({
     destination,
-    attractions: (attractions ?? []) as any[],
-    startDate: (trip as any).start_date,
+    attractions,
+    startDate: trip.start_date ? String(trip.start_date).slice(0, 10) : null,
     days,
-    pace: (String(formData.get('pace') ?? 'balanced') as Pace) ?? 'balanced',
+    pace,
     interests,
-    travelers: (trip as any).travelers ?? 2,
+    travelers: trip.travelers ?? 2,
     includeMeals: formData.get('include_meals') !== 'false',
     romanticFocus: formData.get('romantic') !== 'false',
   });
 
   // Replace any previous generated itinerary for this trip.
-  await supabase.from('itineraries').delete().eq('trip_id', tripId).eq('generated_by', 'generator');
+  await execute(`DELETE FROM itineraries WHERE trip_id = ? AND generated_by = 'generator'`, [
+    tripId,
+  ]);
 
-  const { data: itinerary, error } = await supabase
-    .from('itineraries')
-    .insert({
-      trip_id: tripId,
-      couple_id: ctx.context.couple.id,
-      title: `${destination.name} — ${days} days`,
-      pace: String(formData.get('pace') ?? 'balanced'),
-      interests,
-      generated_by: 'generator',
-      total_cost_cents: estimateCost(plan),
-      currency: (trip as any).currency ?? 'USD',
-      is_primary: true,
-    })
-    .select('id')
-    .single();
+  const itineraryId = uuid();
+  const created = await execute(
+    `INSERT INTO itineraries
+       (id, trip_id, couple_id, title, pace, interests, generated_by, total_cost_cents, currency, is_primary)
+     VALUES (?, ?, ?, ?, ?, ?, 'generator', ?, ?, 1)`,
+    [
+      itineraryId,
+      tripId,
+      ctx.context.couple.id,
+      `${destination.name} — ${days} days`,
+      pace,
+      JSON.stringify(interests),
+      estimateCost(plan),
+      trip.currency ?? 'USD',
+    ]
+  );
 
-  if (error) return { ok: false, error: error.message };
+  if (!created.ok) return { ok: false, error: created.error ?? 'Could not build the itinerary.' };
 
   for (const day of plan) {
-    const { data: dayRow, error: dayError } = await supabase
-      .from('itinerary_days')
-      .insert({
-        itinerary_id: (itinerary as any).id,
-        day_number: day.day_number,
-        day_date: day.day_date,
-        title: day.title,
-        summary: day.summary,
-      })
-      .select('id')
-      .single();
-
-    if (dayError || !dayRow) continue;
-
-    await supabase.from('itinerary_items').insert(
-      day.items.map((item, index) => ({
-        day_id: (dayRow as any).id,
-        attraction_id: item.attraction_id ?? null,
-        start_time: item.start_time,
-        end_time: item.end_time ?? null,
-        title: item.title,
-        item_type: item.item_type,
-        location: item.location ?? null,
-        description: item.description ?? null,
-        duration_minutes: item.duration_minutes ?? null,
-        cost_cents: item.cost_cents ?? null,
-        currency: (trip as any).currency ?? 'USD',
-        sort_order: index,
-      }))
+    const dayId = uuid();
+    const dayResult = await execute(
+      `INSERT INTO itinerary_days (id, itinerary_id, day_number, day_date, title, summary)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [dayId, itineraryId, day.day_number, day.day_date, day.title, day.summary]
     );
+    if (!dayResult.ok) continue;
+
+    for (const [index, item] of day.items.entries()) {
+      await execute(
+        `INSERT INTO itinerary_items
+           (id, day_id, attraction_id, start_time, end_time, title, item_type, location,
+            description, duration_minutes, cost_cents, currency, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          uuid(),
+          dayId,
+          item.attraction_id ?? null,
+          item.start_time,
+          item.end_time ?? null,
+          item.title,
+          item.item_type,
+          item.location ?? null,
+          item.description ?? null,
+          item.duration_minutes ?? null,
+          item.cost_cents ?? null,
+          trip.currency ?? 'USD',
+          index,
+        ]
+      );
+    }
   }
 
   revalidatePath(`/dashboard/travel/${tripId}`);
@@ -221,10 +266,15 @@ export async function toggleItineraryItemAction(
 ): Promise<ActionResult> {
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
+  if (!(await ownsItineraryItem(itemId, ctx.context.couple.id))) {
+    return { ok: false, error: 'Item not found.' };
+  }
 
-  const supabase = createClient();
-  const { error } = await supabase.from('itinerary_items').update({ is_done: done }).eq('id', itemId);
-  if (error) return { ok: false, error: error.message };
+  const result = await execute(`UPDATE itinerary_items SET is_done = ? WHERE id = ?`, [
+    done,
+    itemId,
+  ]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not update the item.' };
   return { ok: true };
 }
 
@@ -232,18 +282,35 @@ export async function addItineraryItemAction(formData: FormData): Promise<Action
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
 
-  const supabase = createClient();
-  const { error } = await supabase.from('itinerary_items').insert({
-    day_id: String(formData.get('day_id') ?? ''),
-    title: String(formData.get('title') ?? '').trim(),
-    item_type: String(formData.get('item_type') ?? 'activity'),
-    start_time: String(formData.get('start_time') ?? '') || null,
-    location: String(formData.get('location') ?? '').trim() || null,
-    cost_cents: formData.get('cost') ? Math.round(Number(formData.get('cost')) * 100) : null,
-    notes: String(formData.get('notes') ?? '').trim() || null,
-  });
+  const dayId = String(formData.get('day_id') ?? '');
+  const title = String(formData.get('title') ?? '').trim();
+  if (!dayId || !title) return { ok: false, error: 'Give the stop a name.' };
 
-  if (error) return { ok: false, error: error.message };
+  const owns = await queryOne<{ id: string }>(
+    `SELECT d.id FROM itinerary_days d
+       JOIN itineraries it ON it.id = d.itinerary_id
+      WHERE d.id = ? AND it.couple_id = ? LIMIT 1`,
+    [dayId, ctx.context.couple.id]
+  );
+  if (!owns) return { ok: false, error: 'Day not found.' };
+
+  const result = await execute(
+    `INSERT INTO itinerary_items
+       (id, day_id, title, item_type, start_time, location, cost_cents, notes)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      uuid(),
+      dayId,
+      title,
+      String(formData.get('item_type') ?? 'activity'),
+      String(formData.get('start_time') ?? '') || null,
+      String(formData.get('location') ?? '').trim() || null,
+      formData.get('cost') ? Math.round(Number(formData.get('cost')) * 100) : null,
+      String(formData.get('notes') ?? '').trim() || null,
+    ]
+  );
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not add the stop.' };
   revalidatePath('/dashboard/travel');
   return { ok: true, message: 'Added.' };
 }
@@ -251,9 +318,12 @@ export async function addItineraryItemAction(formData: FormData): Promise<Action
 export async function deleteItineraryItemAction(itemId: string): Promise<ActionResult> {
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
-  const supabase = createClient();
-  const { error } = await supabase.from('itinerary_items').delete().eq('id', itemId);
-  if (error) return { ok: false, error: error.message };
+  if (!(await ownsItineraryItem(itemId, ctx.context.couple.id))) {
+    return { ok: false, error: 'Item not found.' };
+  }
+
+  const result = await execute(`DELETE FROM itinerary_items WHERE id = ?`, [itemId]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the stop.' };
   return { ok: true };
 }
 
@@ -263,48 +333,48 @@ export async function createPackingListAction(formData: FormData): Promise<Actio
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
 
-  const supabase = createClient();
   const templateId = String(formData.get('template_id') ?? '') || null;
   const tripId = String(formData.get('trip_id') ?? '') || null;
+
+  if (tripId && !(await ownsTrip(tripId, ctx.context.couple.id))) {
+    return { ok: false, error: 'Trip not found.' };
+  }
 
   let name = String(formData.get('name') ?? '').trim() || 'Packing list';
   let items: any[] = [];
 
   if (templateId) {
-    const { data: template } = await supabase
-      .from('checklist_templates')
-      .select('*')
-      .eq('id', templateId)
-      .maybeSingle();
+    const template = await queryOne<any>(
+      `SELECT * FROM checklist_templates WHERE id = ? LIMIT 1`,
+      [templateId]
+    );
     if (template) {
-      name = (template as any).name;
-      items = Array.isArray((template as any).items) ? (template as any).items : [];
+      name = template.name;
+      items = parseJson<any[]>(template.items, []);
     }
   }
 
-  const { data: list, error } = await supabase
-    .from('packing_lists')
-    .insert({
-      trip_id: tripId,
-      couple_id: ctx.context.couple.id,
-      name,
-      template_id: templateId,
-      created_by: ctx.user.id,
-    })
-    .select('id')
-    .single();
+  const listId = uuid();
+  const created = await execute(
+    `INSERT INTO packing_lists (id, trip_id, couple_id, name, template_id, created_by)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [listId, tripId, ctx.context.couple.id, name, templateId, ctx.user.id]
+  );
 
-  if (error) return { ok: false, error: error.message };
+  if (!created.ok) return { ok: false, error: created.error ?? 'Could not create the list.' };
 
-  if (items.length) {
-    await supabase.from('packing_items').insert(
-      items.map((item, index) => ({
-        list_id: (list as any).id,
-        name: item.name ?? 'Item',
-        category: item.category ?? 'General',
-        is_essential: Boolean(item.essential),
-        sort_order: index,
-      }))
+  for (const [index, item] of items.entries()) {
+    await execute(
+      `INSERT INTO packing_items (id, list_id, name, category, is_essential, sort_order)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        uuid(),
+        listId,
+        item.name ?? 'Item',
+        item.category ?? 'General',
+        Boolean(item.essential),
+        index,
+      ]
     );
   }
 
@@ -318,18 +388,16 @@ export async function togglePackingItemAction(
 ): Promise<ActionResult> {
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
+  if (!(await ownsPackingItem(itemId, ctx.context.couple.id))) {
+    return { ok: false, error: 'Item not found.' };
+  }
 
-  const supabase = createClient();
-  const { error } = await supabase
-    .from('packing_items')
-    .update({
-      is_packed: packed,
-      packed_by: packed ? ctx.user.id : null,
-      packed_at: packed ? new Date().toISOString() : null,
-    })
-    .eq('id', itemId);
+  const result = await execute(
+    `UPDATE packing_items SET is_packed = ?, packed_by = ?, packed_at = ? WHERE id = ?`,
+    [packed, packed ? ctx.user.id : null, packed ? nowSql() : null, itemId]
+  );
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not update the item.' };
   return { ok: true };
 }
 
@@ -339,14 +407,16 @@ export async function assignPackingItemAction(
 ): Promise<ActionResult> {
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
+  if (!(await ownsPackingItem(itemId, ctx.context.couple.id))) {
+    return { ok: false, error: 'Item not found.' };
+  }
 
-  const supabase = createClient();
-  const { error } = await supabase
-    .from('packing_items')
-    .update({ assigned_to: userId })
-    .eq('id', itemId);
+  const result = await execute(`UPDATE packing_items SET assigned_to = ? WHERE id = ?`, [
+    userId,
+    itemId,
+  ]);
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not assign the item.' };
   revalidatePath('/dashboard/travel');
   return { ok: true };
 }
@@ -355,16 +425,30 @@ export async function addPackingItemAction(formData: FormData): Promise<ActionRe
   const ctx = await space();
   if (!ctx) return { ok: false, error: 'Not available.' };
 
-  const supabase = createClient();
-  const { error } = await supabase.from('packing_items').insert({
-    list_id: String(formData.get('list_id') ?? ''),
-    name: String(formData.get('name') ?? '').trim(),
-    category: String(formData.get('category') ?? 'General'),
-    quantity: Number(formData.get('quantity') ?? 1),
-    assigned_to: String(formData.get('assigned_to') ?? '') || null,
-  });
+  const listId = String(formData.get('list_id') ?? '');
+  const name = String(formData.get('name') ?? '').trim();
+  if (!listId || !name) return { ok: false, error: 'Give the item a name.' };
 
-  if (error) return { ok: false, error: error.message };
+  const owns = await queryOne<{ id: string }>(
+    `SELECT id FROM packing_lists WHERE id = ? AND couple_id = ? LIMIT 1`,
+    [listId, ctx.context.couple.id]
+  );
+  if (!owns) return { ok: false, error: 'List not found.' };
+
+  const result = await execute(
+    `INSERT INTO packing_items (id, list_id, name, category, quantity, assigned_to)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [
+      uuid(),
+      listId,
+      name,
+      String(formData.get('category') ?? 'General'),
+      Number(formData.get('quantity') ?? 1),
+      String(formData.get('assigned_to') ?? '') || null,
+    ]
+  );
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not add the item.' };
   revalidatePath('/dashboard/travel');
   return { ok: true };
 }

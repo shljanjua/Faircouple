@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { buildMetadata } from '@/lib/seo';
 import { deleteRowAction, updateContactStatusAction } from '@/app/actions/admin';
 import { ActionButton } from '@/components/admin/form-shell';
@@ -13,21 +13,12 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AdminContactsPage() {
-  const supabase = createAdminClient();
-  const [{ data: messages }, { data: subscribers }] = await Promise.all([
-    supabase
-      .from('contact_messages')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(100),
-    supabase
-      .from('newsletter_subscribers')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .limit(200),
+  const [messages, subscribers] = await Promise.all([
+    query<any>(`SELECT * FROM contact_messages ORDER BY created_at DESC LIMIT 100`),
+    query<any>(`SELECT * FROM newsletter_subscribers ORDER BY created_at DESC LIMIT 200`),
   ]);
 
-  const csv = ((subscribers ?? []) as any[])
+  const csv = subscribers
     .map((subscriber) => `${subscriber.email},${subscriber.status},${subscriber.created_at}`)
     .join('\n');
 
@@ -54,7 +45,7 @@ export default async function AdminContactsPage() {
               </tr>
             </thead>
             <tbody>
-              {((messages ?? []) as any[]).map((message) => (
+              {messages.map((message) => (
                 <tr key={message.id}>
                   <Td className="whitespace-nowrap text-muted-foreground">
                     {formatDateTime(message.created_at)}
@@ -113,7 +104,7 @@ export default async function AdminContactsPage() {
 
       <Card className="p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="font-semibold">Newsletter subscribers ({(subscribers ?? []).length})</h2>
+          <h2 className="font-semibold">Newsletter subscribers ({subscribers.length})</h2>
           <a
             href={`data:text/csv;charset=utf-8,${encodeURIComponent(`email,status,created_at\n${csv}`)}`}
             download="faircouples-subscribers.csv"
@@ -134,7 +125,7 @@ export default async function AdminContactsPage() {
               </tr>
             </thead>
             <tbody>
-              {((subscribers ?? []) as any[]).map((subscriber) => (
+              {subscribers.map((subscriber) => (
                 <tr key={subscriber.id}>
                   <Td>{subscriber.email}</Td>
                   <Td className="text-muted-foreground">{subscriber.source ?? '—'}</Td>

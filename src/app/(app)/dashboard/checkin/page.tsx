@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { getCoupleContext } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { CheckinForm } from '@/components/app/checkin-form';
@@ -25,24 +25,20 @@ export default async function CheckinPage() {
   }
 
   const today = new Date().toISOString().slice(0, 10);
-  const supabase = createClient();
 
-  const [{ data: todayRows }, { data: history }] = await Promise.all([
-    supabase
-      .from('daily_checkins')
-      .select('*')
-      .eq('couple_id', context.couple.id)
-      .eq('checkin_date', today),
-    supabase
-      .from('daily_checkins')
-      .select('*')
-      .eq('couple_id', context.couple.id)
-      .order('checkin_date', { ascending: false })
-      .limit(30),
+  const [todayRows, history] = await Promise.all([
+    query<any>(`SELECT * FROM daily_checkins WHERE couple_id = ? AND checkin_date = ?`, [
+      context.couple.id,
+      today,
+    ]),
+    query<any>(
+      `SELECT * FROM daily_checkins WHERE couple_id = ? ORDER BY checkin_date DESC LIMIT 30`,
+      [context.couple.id]
+    ),
   ]);
 
-  const mine = (todayRows ?? []).find((row: any) => row.user_id === context.me.user_id);
-  const theirs = (todayRows ?? []).find((row: any) => row.user_id !== context.me.user_id);
+  const mine = todayRows.find((row) => row.user_id === context.me.user_id);
+  const theirs = todayRows.find((row) => row.user_id !== context.me.user_id);
   const partnerName = context.partner?.profile?.full_name ?? 'Your partner';
 
   return (
@@ -106,9 +102,9 @@ export default async function CheckinPage() {
 
           <Card className="p-5">
             <h2 className="font-semibold">Last 30 days</h2>
-            {history && history.length > 0 ? (
+            {history.length > 0 ? (
               <ul className="mt-4 max-h-80 space-y-2 overflow-y-auto pr-1 text-sm">
-                {history.map((row: any) => (
+                {history.map((row) => (
                   <li key={row.id} className="flex items-center justify-between gap-3 border-b border-border pb-2 last:border-0">
                     <span className="text-muted-foreground">{formatDate(row.checkin_date)}</span>
                     <span className="flex items-center gap-2">

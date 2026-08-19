@@ -1,5 +1,6 @@
+import 'server-only';
 import Stripe from 'stripe';
-import { createAdminClient } from '@/lib/supabase/server';
+import { queryOne, parseJson, toBool } from '@/lib/db';
 
 export interface GatewayConfig {
   provider: 'stripe' | 'paypal' | 'manual';
@@ -10,24 +11,17 @@ export interface GatewayConfig {
 
 /**
  * Gateway credentials come from the admin panel first, falling back to
- * environment variables. That means the site can be reconfigured without a
- * redeploy, while still working from env vars alone.
+ * environment variables — so keys can be rotated without a redeploy.
  */
 export async function getGateway(provider: 'stripe' | 'paypal'): Promise<GatewayConfig | null> {
-  let row: any = null;
-  try {
-    const supabase = createAdminClient();
-    const { data } = await supabase
-      .from('payment_gateways')
-      .select('*')
-      .eq('provider', provider)
-      .maybeSingle();
-    row = data;
-  } catch {
-    row = null;
-  }
+  const row = await queryOne<any>(
+    `SELECT provider, is_enabled, mode, credentials FROM payment_gateways WHERE provider = ? LIMIT 1`,
+    [provider]
+  );
 
-  const credentials: Record<string, string> = { ...(row?.credentials ?? {}) };
+  const credentials: Record<string, string> = {
+    ...parseJson<Record<string, string>>(row?.credentials, {}),
+  };
 
   if (provider === 'stripe') {
     credentials.secret_key = credentials.secret_key || process.env.STRIPE_SECRET_KEY || '';
@@ -46,7 +40,7 @@ export async function getGateway(provider: 'stripe' | 'paypal'): Promise<Gateway
 
   return {
     provider,
-    isEnabled: row ? Boolean(row.is_enabled) && hasCredentials : hasCredentials,
+    isEnabled: row ? toBool(row.is_enabled) && hasCredentials : hasCredentials,
     mode: row?.mode ?? (process.env.PAYPAL_ENV === 'live' ? 'live' : 'test'),
     credentials,
   };

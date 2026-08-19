@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import { getPublicSettings, settingString } from '@/lib/settings';
 
 export const SITE_URL = (
-  process.env.NEXT_PUBLIC_SITE_URL || 'https://faircouples.com'
+  process.env.NEXT_PUBLIC_SITE_URL || 'https://grey-opossum-178268.hostingersite.com'
 ).replace(/\/$/, '');
 
 export function absoluteUrl(path = '/') {

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48" role="img" aria-label="FairCouples">
+  <path fill="#e11d48" d="M24 43.2 8.6 28.6a10.2 10.2 0 0 1 14.4-14.4l1 1 1-1a10.2 10.2 0 1 1 14.4 14.4Z"/>
+  <path fill="#fff" d="M13.5 25.5h21v2.4h-21zM21.6 20.4h2.4v12.6h-2.4z" opacity=".9"/>
+  <circle cx="15.5" cy="26.7" r="3.4" fill="#fff" opacity=".9"/>
+  <circle cx="32.5" cy="26.7" r="3.4" fill="#fff" opacity=".9"/>
+</svg>

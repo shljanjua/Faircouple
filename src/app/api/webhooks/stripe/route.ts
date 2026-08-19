@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import type Stripe from 'stripe';
-import { createAdminClient } from '@/lib/supabase/server';
+import { execute, queryOne, uuid, nowSql, toMysqlDateTime } from '@/lib/db';
 import { getStripe, getGateway } from '@/lib/payments';
 import { sendEmail } from '@/lib/email';
 import { formatMoney } from '@/lib/currency';
@@ -38,107 +38,155 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Webhook verification failed: ${message}` }, { status: 400 });
   }
 
-  const supabase = createAdminClient();
-
   // Idempotency: skip events we have already processed.
-  const { data: existing } = await supabase
-    .from('webhook_events')
-    .select('id, status')
-    .eq('provider', 'stripe')
-    .eq('event_id', event.id)
-    .maybeSingle();
+  const existing = await queryOne<{ status: string }>(
+    `SELECT status FROM webhook_events WHERE provider = 'stripe' AND event_id = ? LIMIT 1`,
+    [event.id]
+  );
 
-  if ((existing as any)?.status === 'processed') {
+  if (existing?.status === 'processed') {
     return NextResponse.json({ received: true, duplicate: true });
   }
 
-  await supabase.from('webhook_events').upsert(
-    {
-      provider: 'stripe',
-      event_id: event.id,
-      event_type: event.type,
-      payload: event as any,
-      status: 'received',
-    },
-    { onConflict: 'provider,event_id' }
+  await execute(
+    `INSERT INTO webhook_events (id, provider, event_id, event_type, payload, status)
+     VALUES (?, 'stripe', ?, ?, ?, 'received')
+     ON DUPLICATE KEY UPDATE event_type = VALUES(event_type), payload = VALUES(payload), status = 'received'`,
+    [uuid(), event.id, event.type, JSON.stringify(event)]
   );
 
   try {
     switch (event.type) {
       case 'checkout.session.completed': {
-        const session = event.data.object as Stripe.Checkout.Session;
-        await handleCheckoutCompleted(stripe, supabase, session);
+        await handleCheckoutCompleted(stripe, event.data.object as Stripe.Checkout.Session);
         break;
       }
       case 'customer.subscription.created':
       case 'customer.subscription.updated':
       case 'customer.subscription.deleted': {
-        const subscription = event.data.object as Stripe.Subscription;
-        await syncSubscription(supabase, subscription);
+        await syncSubscription(event.data.object as Stripe.Subscription);
         break;
       }
       case 'invoice.paid': {
-        const invoice = event.data.object as Stripe.Invoice;
-        await recordInvoice(supabase, invoice, 'succeeded');
+        await recordInvoice(event.data.object as Stripe.Invoice, 'succeeded');
         break;
       }
       case 'invoice.payment_failed': {
         const invoice = event.data.object as Stripe.Invoice;
-        await recordInvoice(supabase, invoice, 'failed');
-        await notifyPaymentFailure(supabase, invoice);
+        await recordInvoice(invoice, 'failed');
+        await notifyPaymentFailure(invoice);
         break;
       }
       case 'charge.refunded': {
         const charge = event.data.object as Stripe.Charge;
-        await supabase
-          .from('payments')
-          .update({
-            status: charge.amount_refunded === charge.amount ? 'refunded' : 'partially_refunded',
-            refunded_cents: charge.amount_refunded,
-          })
-          .eq('provider', 'stripe')
-          .eq('provider_payment_id', charge.payment_intent as string);
+        await execute(
+          `UPDATE payments SET status = ?, refunded_cents = ?
+            WHERE provider = 'stripe' AND provider_payment_id = ?`,
+          [
+            charge.amount_refunded === charge.amount ? 'refunded' : 'partially_refunded',
+            charge.amount_refunded,
+            charge.payment_intent as string,
+          ]
+        );
         break;
       }
       default:
         break;
     }
 
-    await supabase
-      .from('webhook_events')
-      .update({ status: 'processed', processed_at: new Date().toISOString() })
-      .eq('provider', 'stripe')
-      .eq('event_id', event.id);
+    await execute(
+      `UPDATE webhook_events SET status = 'processed', processed_at = ?
+        WHERE provider = 'stripe' AND event_id = ?`,
+      [nowSql(), event.id]
+    );
 
     return NextResponse.json({ received: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Handler failed';
-    await supabase
-      .from('webhook_events')
-      .update({ status: 'failed', error: message })
-      .eq('provider', 'stripe')
-      .eq('event_id', event.id);
+    await execute(
+      `UPDATE webhook_events SET status = 'failed', error = ?
+        WHERE provider = 'stripe' AND event_id = ?`,
+      [message, event.id]
+    );
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
-async function handleCheckoutCompleted(
-  stripe: Stripe,
-  supabase: ReturnType<typeof createAdminClient>,
-  session: Stripe.Checkout.Session
-) {
+/** Writes (or refreshes) the subscription row keyed by provider + provider id. */
+async function upsertSubscription(row: {
+  userId: string;
+  coupleId: string | null;
+  planId: string | null;
+  priceId: string | null;
+  providerSubscriptionId: string;
+  providerCustomerId: string | null;
+  status: string;
+  currency: string;
+  interval: string;
+  amountCents: number;
+  trialEndsAt?: Date | null;
+  periodStart: Date;
+  periodEnd: Date;
+  cancelAtPeriodEnd?: boolean;
+  canceledAt?: Date | null;
+  endedAt?: Date | null;
+}) {
+  await execute(
+    `INSERT INTO subscriptions
+       (id, user_id, couple_id, plan_id, price_id, provider, provider_subscription_id,
+        provider_customer_id, status, currency, billing_interval, amount_cents, trial_ends_at,
+        current_period_start, current_period_end, cancel_at_period_end, canceled_at, ended_at)
+     VALUES (?, ?, ?, ?, ?, 'stripe', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       couple_id            = VALUES(couple_id),
+       plan_id              = COALESCE(VALUES(plan_id), plan_id),
+       price_id             = VALUES(price_id),
+       provider_customer_id = VALUES(provider_customer_id),
+       status               = VALUES(status),
+       currency             = VALUES(currency),
+       billing_interval     = VALUES(billing_interval),
+       amount_cents         = VALUES(amount_cents),
+       trial_ends_at        = VALUES(trial_ends_at),
+       current_period_start = VALUES(current_period_start),
+       current_period_end   = VALUES(current_period_end),
+       cancel_at_period_end = VALUES(cancel_at_period_end),
+       canceled_at          = VALUES(canceled_at),
+       ended_at             = VALUES(ended_at)`,
+    [
+      uuid(),
+      row.userId,
+      row.coupleId,
+      row.planId,
+      row.priceId,
+      row.providerSubscriptionId,
+      row.providerCustomerId,
+      row.status,
+      row.currency,
+      row.interval,
+      row.amountCents,
+      toMysqlDateTime(row.trialEndsAt ?? null),
+      toMysqlDateTime(row.periodStart),
+      toMysqlDateTime(row.periodEnd),
+      row.cancelAtPeriodEnd ?? false,
+      toMysqlDateTime(row.canceledAt ?? null),
+      toMysqlDateTime(row.endedAt ?? null),
+    ]
+  );
+}
+
+async function handleCheckoutCompleted(stripe: Stripe, session: Stripe.Checkout.Session) {
   const metadata = session.metadata ?? {};
   const userId = metadata.user_id || (session.client_reference_id ?? '');
   if (!userId) return;
 
-  const planId = metadata.plan_id;
+  const planId = metadata.plan_id ?? null;
   const interval = metadata.interval ?? 'month';
   const currency = (session.currency ?? metadata.currency ?? 'usd').toUpperCase();
   const amount = session.amount_total ?? 0;
 
   if (session.mode === 'subscription' && session.subscription) {
     const subscription = await stripe.subscriptions.retrieve(session.subscription as string);
-    await syncSubscription(supabase, subscription, {
+    await syncSubscription(subscription, {
       userId,
       coupleId: metadata.couple_id || null,
       planId,
@@ -150,59 +198,58 @@ async function handleCheckoutCompleted(
     const end = new Date(start);
     end.setFullYear(end.getFullYear() + 100);
 
-    await supabase.from('subscriptions').upsert(
-      {
-        user_id: userId,
-        couple_id: metadata.couple_id || null,
-        plan_id: planId,
-        price_id: metadata.price_id || null,
-        provider: 'stripe',
-        provider_subscription_id: session.id,
-        provider_customer_id: (session.customer as string) ?? null,
-        status: 'active',
-        currency,
-        interval: 'lifetime',
-        amount_cents: amount,
-        current_period_start: start.toISOString(),
-        current_period_end: end.toISOString(),
-      },
-      { onConflict: 'provider,provider_subscription_id' }
-    );
+    await upsertSubscription({
+      userId,
+      coupleId: metadata.couple_id || null,
+      planId,
+      priceId: metadata.price_id || null,
+      providerSubscriptionId: session.id,
+      providerCustomerId: (session.customer as string) ?? null,
+      status: 'active',
+      currency,
+      interval: 'lifetime',
+      amountCents: amount,
+      periodStart: start,
+      periodEnd: end,
+    });
   }
 
-  await supabase.from('payments').insert({
-    user_id: userId,
-    provider: 'stripe',
-    provider_payment_id: (session.payment_intent as string) ?? session.id,
-    provider_invoice_id: (session.invoice as string) ?? null,
-    amount_cents: amount,
-    currency,
-    status: 'succeeded',
-    description: `FairCouples checkout (${interval})`,
-    billing_email: session.customer_details?.email ?? null,
-    billing_country: session.customer_details?.address?.country ?? null,
-    paid_at: new Date().toISOString(),
-  });
+  await execute(
+    `INSERT INTO payments
+       (id, user_id, provider, provider_payment_id, provider_invoice_id, amount_cents, currency,
+        status, description, billing_email, billing_country, paid_at)
+     VALUES (?, ?, 'stripe', ?, ?, ?, ?, 'succeeded', ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE status = 'succeeded', paid_at = VALUES(paid_at)`,
+    [
+      uuid(),
+      userId,
+      (session.payment_intent as string) ?? session.id,
+      (session.invoice as string) ?? null,
+      amount,
+      currency,
+      `FairCouples checkout (${interval})`,
+      session.customer_details?.email ?? null,
+      session.customer_details?.address?.country ?? null,
+      nowSql(),
+    ]
+  );
 
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('email, full_name')
-    .eq('id', userId)
-    .maybeSingle();
+  const profile = await queryOne<{ email: string; full_name: string | null }>(
+    `SELECT email, full_name FROM profiles WHERE id = ? LIMIT 1`,
+    [userId]
+  );
 
-  const { data: plan } = await supabase
-    .from('plans')
-    .select('name')
-    .eq('id', planId)
-    .maybeSingle();
+  const plan = planId
+    ? await queryOne<{ name: string }>(`SELECT name FROM plans WHERE id = ? LIMIT 1`, [planId])
+    : null;
 
-  if ((profile as any)?.email) {
+  if (profile?.email) {
     await sendEmail({
-      to: (profile as any).email,
+      to: profile.email,
       template: 'subscription-active',
       variables: {
-        name: (profile as any).full_name ?? 'there',
-        plan_name: (plan as any)?.name ?? 'your plan',
+        name: profile.full_name ?? 'there',
+        plan_name: plan?.name ?? 'your plan',
         amount: formatMoney(amount, currency),
         currency,
         next_billing_date: interval === 'lifetime' ? 'never — you own it' : 'in one billing period',
@@ -214,12 +261,11 @@ async function handleCheckoutCompleted(
 }
 
 async function syncSubscription(
-  supabase: ReturnType<typeof createAdminClient>,
   subscription: Stripe.Subscription,
   overrides?: {
     userId?: string;
     coupleId?: string | null;
-    planId?: string;
+    planId?: string | null;
     priceId?: string | null;
   }
 ) {
@@ -230,71 +276,69 @@ async function syncSubscription(
   const item = subscription.items.data[0];
   const interval = item?.price?.recurring?.interval ?? 'month';
 
-  await supabase.from('subscriptions').upsert(
-    {
-      user_id: userId,
-      couple_id: overrides?.coupleId ?? metadata.couple_id ?? null,
-      plan_id: overrides?.planId ?? metadata.plan_id,
-      price_id: overrides?.priceId ?? metadata.price_id ?? null,
-      provider: 'stripe',
-      provider_subscription_id: subscription.id,
-      provider_customer_id: subscription.customer as string,
-      status: subscription.status,
-      currency: (item?.price?.currency ?? 'usd').toUpperCase(),
-      interval,
-      amount_cents: item?.price?.unit_amount ?? 0,
-      trial_ends_at: subscription.trial_end
-        ? new Date(subscription.trial_end * 1000).toISOString()
-        : null,
-      current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-      current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-      cancel_at_period_end: subscription.cancel_at_period_end,
-      canceled_at: subscription.canceled_at
-        ? new Date(subscription.canceled_at * 1000).toISOString()
-        : null,
-      ended_at: subscription.ended_at ? new Date(subscription.ended_at * 1000).toISOString() : null,
-    },
-    { onConflict: 'provider,provider_subscription_id' }
-  );
+  await upsertSubscription({
+    userId,
+    coupleId: overrides?.coupleId ?? metadata.couple_id ?? null,
+    planId: overrides?.planId ?? metadata.plan_id ?? null,
+    priceId: overrides?.priceId ?? metadata.price_id ?? null,
+    providerSubscriptionId: subscription.id,
+    providerCustomerId: subscription.customer as string,
+    status: subscription.status,
+    currency: (item?.price?.currency ?? 'usd').toUpperCase(),
+    interval,
+    amountCents: item?.price?.unit_amount ?? 0,
+    trialEndsAt: subscription.trial_end ? new Date(subscription.trial_end * 1000) : null,
+    periodStart: new Date(subscription.current_period_start * 1000),
+    periodEnd: new Date(subscription.current_period_end * 1000),
+    cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    canceledAt: subscription.canceled_at ? new Date(subscription.canceled_at * 1000) : null,
+    endedAt: subscription.ended_at ? new Date(subscription.ended_at * 1000) : null,
+  });
 }
 
-async function recordInvoice(
-  supabase: ReturnType<typeof createAdminClient>,
-  invoice: Stripe.Invoice,
-  status: 'succeeded' | 'failed'
-) {
-  const { data: subscription } = await supabase
-    .from('subscriptions')
-    .select('id, user_id')
-    .eq('provider', 'stripe')
-    .eq('provider_subscription_id', (invoice.subscription as string) ?? '')
-    .maybeSingle();
+async function recordInvoice(invoice: Stripe.Invoice, status: 'succeeded' | 'failed') {
+  const subscription = invoice.subscription
+    ? await queryOne<{ id: string; user_id: string }>(
+        `SELECT id, user_id FROM subscriptions
+          WHERE provider = 'stripe' AND provider_subscription_id = ? LIMIT 1`,
+        [invoice.subscription as string]
+      )
+    : null;
 
-  await supabase.from('payments').upsert(
-    {
-      user_id: (subscription as any)?.user_id ?? null,
-      subscription_id: (subscription as any)?.id ?? null,
-      provider: 'stripe',
-      provider_payment_id: (invoice.payment_intent as string) ?? invoice.id,
-      provider_invoice_id: invoice.id,
-      amount_cents: invoice.amount_paid || invoice.amount_due,
-      currency: (invoice.currency ?? 'usd').toUpperCase(),
+  await execute(
+    `INSERT INTO payments
+       (id, user_id, subscription_id, provider, provider_payment_id, provider_invoice_id,
+        amount_cents, currency, status, description, invoice_url, receipt_url, billing_email,
+        paid_at, failure_reason)
+     VALUES (?, ?, ?, 'stripe', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       subscription_id = VALUES(subscription_id),
+       amount_cents    = VALUES(amount_cents),
+       status          = VALUES(status),
+       invoice_url     = VALUES(invoice_url),
+       receipt_url     = VALUES(receipt_url),
+       paid_at         = VALUES(paid_at),
+       failure_reason  = VALUES(failure_reason)`,
+    [
+      uuid(),
+      subscription?.user_id ?? null,
+      subscription?.id ?? null,
+      (invoice.payment_intent as string) ?? invoice.id,
+      invoice.id,
+      invoice.amount_paid || invoice.amount_due,
+      (invoice.currency ?? 'usd').toUpperCase(),
       status,
-      description: invoice.lines.data[0]?.description ?? 'Subscription renewal',
-      invoice_url: invoice.hosted_invoice_url ?? null,
-      receipt_url: invoice.invoice_pdf ?? null,
-      billing_email: invoice.customer_email ?? null,
-      paid_at: status === 'succeeded' ? new Date().toISOString() : null,
-      failure_reason: status === 'failed' ? 'Card declined or expired' : null,
-    },
-    { onConflict: 'provider,provider_payment_id' }
+      invoice.lines.data[0]?.description ?? 'Subscription renewal',
+      invoice.hosted_invoice_url ?? null,
+      invoice.invoice_pdf ?? null,
+      invoice.customer_email ?? null,
+      status === 'succeeded' ? nowSql() : null,
+      status === 'failed' ? 'Card declined or expired' : null,
+    ]
   );
 }
 
-async function notifyPaymentFailure(
-  supabase: ReturnType<typeof createAdminClient>,
-  invoice: Stripe.Invoice
-) {
+async function notifyPaymentFailure(invoice: Stripe.Invoice) {
   if (!invoice.customer_email) return;
   await sendEmail({
     to: invoice.customer_email,

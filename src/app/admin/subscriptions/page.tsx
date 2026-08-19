@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { buildMetadata } from '@/lib/seo';
 import { adminUpdateSubscriptionAction } from '@/app/actions/admin';
 import { AdminForm } from '@/components/admin/form-shell';
@@ -18,27 +18,27 @@ export default async function AdminSubscriptionsPage({
 }: {
   searchParams: { status?: string };
 }) {
-  const supabase = createAdminClient();
+  const select = `SELECT s.*, p.name AS plan_name, p.slug AS plan_slug,
+                         pr.email AS member_email, pr.full_name AS member_name
+                    FROM subscriptions s
+                    LEFT JOIN plans p ON p.id = s.plan_id
+                    LEFT JOIN profiles pr ON pr.id = s.user_id`;
 
-  let query = supabase
-    .from('subscriptions')
-    .select('*, plan:plans(name, slug), profile:profiles(email, full_name)')
-    .order('created_at', { ascending: false })
-    .limit(100);
-
-  if (searchParams.status) query = query.eq('status', searchParams.status);
-
-  const [{ data: subscriptions }, { data: all }] = await Promise.all([
-    query,
-    supabase.from('subscriptions').select('status, amount_cents, interval, currency'),
+  const [subscriptions, rows] = await Promise.all([
+    searchParams.status
+      ? query<any>(`${select} WHERE s.status = ? ORDER BY s.created_at DESC LIMIT 100`, [
+          searchParams.status,
+        ])
+      : query<any>(`${select} ORDER BY s.created_at DESC LIMIT 100`),
+    query<any>(`SELECT status, amount_cents, billing_interval, currency FROM subscriptions`),
   ]);
 
-  const rows = (all ?? []) as any[];
   const active = rows.filter((row) => ['active', 'trialing'].includes(row.status));
   const mrr = active.reduce((sum, row) => {
-    if (row.interval === 'year') return sum + Math.round((row.amount_cents ?? 0) / 12);
-    if (row.interval === 'lifetime') return sum;
-    return sum + (row.amount_cents ?? 0);
+    const amount = Number(row.amount_cents ?? 0);
+    if (row.billing_interval === 'year') return sum + Math.round(amount / 12);
+    if (row.billing_interval === 'lifetime') return sum;
+    return sum + amount;
   }, 0);
 
   const churned = rows.filter((row) => ['canceled', 'expired'].includes(row.status)).length;
@@ -98,15 +98,15 @@ export default async function AdminSubscriptionsPage({
           </tr>
         </thead>
         <tbody>
-          {((subscriptions ?? []) as any[]).map((subscription) => (
+          {subscriptions.map((subscription) => (
             <tr key={subscription.id}>
               <Td>
-                <span className="font-medium">{subscription.profile?.full_name ?? '—'}</span>
+                <span className="font-medium">{subscription.member_name ?? '—'}</span>
                 <span className="block text-xs text-muted-foreground">
-                  {subscription.profile?.email}
+                  {subscription.member_email}
                 </span>
               </Td>
-              <Td>{subscription.plan?.name ?? '—'}</Td>
+              <Td>{subscription.plan_name ?? '—'}</Td>
               <Td className="capitalize text-muted-foreground">{subscription.provider}</Td>
               <Td>
                 <Badge
@@ -132,7 +132,7 @@ export default async function AdminSubscriptionsPage({
               <Td className="text-right font-medium tabular-nums">
                 {formatMoney(subscription.amount_cents, subscription.currency)}
                 <span className="block text-xs font-normal text-muted-foreground">
-                  /{subscription.interval}
+                  /{subscription.billing_interval}
                 </span>
               </Td>
               <Td>

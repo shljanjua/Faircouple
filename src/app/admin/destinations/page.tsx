@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query, toBool } from '@/lib/db';
 import { buildMetadata } from '@/lib/seo';
 import { Badge, Card, Stat, Table, Td, Th } from '@/components/ui';
 
@@ -15,24 +15,37 @@ export default async function AdminDestinationsPage({
 }: {
   searchParams: { q?: string };
 }) {
-  const supabase = createAdminClient();
+  const search = searchParams.q?.trim();
 
-  let query = supabase
-    .from('destinations')
-    .select('*, country:countries(name, flag_emoji, region)')
-    .order('popularity', { ascending: false })
-    .limit(200);
+  const [destinations, counts] = await Promise.all([
+    search
+      ? query<any>(
+          `SELECT d.*, c.name AS country_name, c.flag_emoji AS country_flag
+             FROM destinations d
+             LEFT JOIN countries c ON c.code = d.country_code
+            WHERE d.name LIKE ?
+            ORDER BY d.popularity DESC LIMIT 200`,
+          [`%${search}%`]
+        )
+      : query<any>(
+          `SELECT d.*, c.name AS country_name, c.flag_emoji AS country_flag
+             FROM destinations d
+             LEFT JOIN countries c ON c.code = d.country_code
+            ORDER BY d.popularity DESC LIMIT 200`
+        ),
+    query<{ metric: string; total: number }>(
+      `SELECT 'countries' AS metric, COUNT(*) AS total FROM countries
+       UNION ALL SELECT 'attractions', COUNT(*) FROM attractions`
+    ),
+  ]);
 
-  if (searchParams.q) query = query.ilike('name', `%${searchParams.q}%`);
+  const countOf = (metric: string) =>
+    Number(counts.find((row) => row.metric === metric)?.total ?? 0);
 
-  const [{ data: destinations }, { count: countryCount }, { count: attractionCount }] =
-    await Promise.all([
-      query,
-      supabase.from('countries').select('code', { count: 'exact', head: true }),
-      supabase.from('attractions').select('id', { count: 'exact', head: true }),
-    ]);
-
-  const list = (destinations ?? []) as any[];
+  const list = destinations.map((destination) => ({
+    ...destination,
+    is_honeymoon: toBool(destination.is_honeymoon),
+  }));
 
   return (
     <div className="space-y-6">
@@ -45,8 +58,8 @@ export default async function AdminDestinationsPage({
 
       <div className="grid gap-4 sm:grid-cols-3">
         <Stat label="Destinations" value={list.length} />
-        <Stat label="Countries" value={countryCount ?? 0} />
-        <Stat label="Attractions" value={attractionCount ?? 0} />
+        <Stat label="Countries" value={countOf('countries')} />
+        <Stat label="Attractions" value={countOf('attractions')} />
       </div>
 
       <Card className="p-4">
@@ -87,7 +100,7 @@ export default async function AdminDestinationsPage({
                 <span className="block text-xs text-muted-foreground">/{destination.slug}</span>
               </Td>
               <Td className="text-muted-foreground">
-                {destination.country?.flag_emoji} {destination.country?.name}
+                {destination.country_flag} {destination.country_name}
               </Td>
               <Td className="capitalize text-muted-foreground">{destination.destination_type}</Td>
               <Td className="text-muted-foreground">
@@ -116,9 +129,9 @@ export default async function AdminDestinationsPage({
 
       <Card className="p-5 text-sm text-muted-foreground">
         Destinations, countries and attractions are seeded from{' '}
-        <code>supabase/migrations/0003_seed.sql</code>. To add more, insert rows into the{' '}
-        <code>destinations</code> and <code>attractions</code> tables — the public guides, sitemap
-        and itinerary generator pick them up automatically.
+        <code>database/mysql/faircouples-mysql.sql</code>. To add more, insert rows into the{' '}
+        <code>destinations</code> and <code>attractions</code> tables in phpMyAdmin — the public
+        guides, sitemap and itinerary generator pick them up automatically.
       </Card>
     </div>
   );

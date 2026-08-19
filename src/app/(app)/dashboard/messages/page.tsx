@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createClient } from '@/lib/supabase/server';
+import { query, queryOne, execute, uuid, parseJson } from '@/lib/db';
 import { getCoupleContext } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { Messenger } from '@/components/app/messenger';
@@ -23,37 +23,34 @@ export default async function MessagesPage() {
     );
   }
 
-  const supabase = createClient();
-
-  let { data: conversation } = await supabase
-    .from('conversations')
-    .select('*')
-    .eq('couple_id', context.couple.id)
-    .eq('kind', 'direct')
-    .maybeSingle();
+  let conversation = await queryOne<any>(
+    `SELECT * FROM conversations WHERE couple_id = ? AND kind = 'direct' LIMIT 1`,
+    [context.couple.id]
+  );
 
   if (!conversation) {
-    const { data: created } = await supabase
-      .from('conversations')
-      .insert({ couple_id: context.couple.id, kind: 'direct', title: 'Private chat' })
-      .select('*')
-      .single();
-    conversation = created;
+    const id = uuid();
+    await execute(
+      `INSERT INTO conversations (id, couple_id, kind, title) VALUES (?, ?, 'direct', 'Private chat')`,
+      [id, context.couple.id]
+    );
+    conversation = { id };
   }
 
-  const { data: messages } = await supabase
-    .from('messages')
-    .select('*')
-    .eq('couple_id', context.couple.id)
-    .is('deleted_at', null)
-    .order('created_at', { ascending: true })
-    .limit(200);
+  const messages = await query<any>(
+    `SELECT * FROM messages WHERE couple_id = ? AND deleted_at IS NULL
+      ORDER BY created_at ASC LIMIT 200`,
+    [context.couple.id]
+  );
 
   return (
     <Messenger
       coupleId={context.couple.id}
-      conversationId={(conversation as any)?.id ?? ''}
-      initialMessages={(messages ?? []) as any[]}
+      conversationId={conversation?.id ?? ''}
+      initialMessages={messages.map((message) => ({
+        ...message,
+        reactions: parseJson<Record<string, string[]>>(message.reactions, {}),
+      }))}
       meId={context.me.user_id}
       meName={context.me.profile?.full_name ?? 'You'}
       meAvatar={context.me.profile?.avatar_url ?? null}

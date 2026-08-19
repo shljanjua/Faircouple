@@ -3,7 +3,7 @@
 import { useRef, useState, useTransition, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { Download, Trash2, Upload } from 'lucide-react';
-import { getBrowserClient } from '@/lib/supabase/client';
+import { changePasswordAction, signOutAction } from '@/app/actions/auth';
 import {
   deleteMyAccountAction,
   exportMyDataAction,
@@ -25,7 +25,6 @@ const NOTIFICATION_KEYS: { key: string; label: string; description: string }[] =
 
 export function SettingsWorkspace({ profile }: { profile: Profile }) {
   const router = useRouter();
-  const supabase = getBrowserClient();
   const [tab, setTab] = useState<'profile' | 'security' | 'notifications' | 'privacy'>('profile');
   const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null);
   const [pending, startTransition] = useTransition();
@@ -51,38 +50,40 @@ export function SettingsWorkspace({ profile }: { profile: Profile }) {
       return;
     }
     setUploading(true);
-    const extension = file.name.split('.').pop() ?? 'jpg';
-    const path = `${profile.id}/avatar-${Date.now()}.${extension}`;
 
-    const { error } = await supabase.storage.from('avatars').upload(path, file, { upsert: true });
+    const upload = new FormData();
+    upload.set('bucket', 'avatars');
+    upload.set('prefix', 'avatar');
+    upload.set('file', file);
+
+    const response = await fetch('/api/upload', { method: 'POST', body: upload });
+    const payload = await response.json().catch(() => ({ error: 'Upload failed.' }));
     setUploading(false);
-    if (error) {
-      setStatus({ ok: false, message: error.message });
+
+    if (!response.ok || !payload.path) {
+      setStatus({ ok: false, message: payload.error ?? 'Upload failed.' });
       return;
     }
-    const result = await updateAvatarAction(path);
-    notify(result);
+
+    notify(await updateAvatarAction(payload.path));
     router.refresh();
   }
 
   async function changePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const current = String(formData.get('current_password') ?? '');
     const password = String(formData.get('password') ?? '');
     const confirm = String(formData.get('confirm') ?? '');
 
-    if (password.length < 8) {
-      setStatus({ ok: false, message: 'Use at least 8 characters.' });
-      return;
-    }
     if (password !== confirm) {
       setStatus({ ok: false, message: 'The two passwords do not match.' });
       return;
     }
 
-    const { error } = await supabase.auth.updateUser({ password });
-    notify(error ? { ok: false, error: error.message } : { ok: true, message: 'Password updated.' });
-    (event.target as HTMLFormElement).reset();
+    notify(await changePasswordAction(current, password));
+    form.reset();
   }
 
   async function exportData() {
@@ -240,7 +241,21 @@ export function SettingsWorkspace({ profile }: { profile: Profile }) {
         <Card className="p-5">
           <h2 className="font-semibold">Change password</h2>
           <form onSubmit={changePassword} className="mt-4 max-w-md space-y-4">
-            <Field label="New password" required htmlFor="password" hint="At least 8 characters.">
+            <Field label="Current password" required htmlFor="current_password">
+              <Input
+                id="current_password"
+                name="current_password"
+                type="password"
+                autoComplete="current-password"
+                required
+              />
+            </Field>
+            <Field
+              label="New password"
+              required
+              htmlFor="password"
+              hint="At least 8 characters, with an uppercase letter and a number."
+            >
               <Input id="password" name="password" type="password" autoComplete="new-password" required />
             </Field>
             <Field label="Confirm new password" required htmlFor="confirm">
@@ -258,8 +273,9 @@ export function SettingsWorkspace({ profile }: { profile: Profile }) {
               variant="outline"
               className="mt-4"
               onClick={async () => {
-                await supabase.auth.signOut();
+                await signOutAction();
                 router.push('/signin');
+                router.refresh();
               }}
             >
               Sign out
@@ -334,8 +350,8 @@ export function SettingsWorkspace({ profile }: { profile: Profile }) {
                     const result = await deleteMyAccountAction(confirmText);
                     notify(result);
                     if (result.ok) {
-                      await supabase.auth.signOut();
                       router.push('/');
+                      router.refresh();
                     }
                   })
                 }

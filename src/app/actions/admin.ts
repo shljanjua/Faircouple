@@ -1,19 +1,25 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createAdminClient } from '@/lib/supabase/server';
-import { getSessionUser } from '@/lib/auth';
+import { randomBytes, createHash } from 'crypto';
+import bcrypt from 'bcryptjs';
+import { execute, query, queryOne, uuid, nowSql, toMysqlDateTime, parseJson } from '@/lib/db';
+import { getSessionUser, isAdminRole } from '@/lib/auth';
 import { setSettings } from '@/lib/settings';
 import { recordAudit } from '@/lib/audit';
 import { sendEmail, verifySmtp } from '@/lib/email';
 import { slugify } from '@/lib/utils';
+import { SITE_URL } from '@/lib/seo';
 import type { ActionResult } from '@/app/actions/couple';
 
 async function requireAdmin() {
   const user = await getSessionUser();
-  if (!user) return null;
-  if (user.profile.role !== 'admin' && user.profile.role !== 'superadmin') return null;
+  if (!user || !isAdminRole(user.profile.role)) return null;
   return user;
+}
+
+function hashToken(token: string) {
+  return createHash('sha256').update(token).digest('hex');
 }
 
 function parseValue(raw: string): any {
@@ -31,6 +37,13 @@ function parseValue(raw: string): any {
     }
   }
   return raw;
+}
+
+function csv(formData: FormData, key: string) {
+  return String(formData.get(key) ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 /* ------------------------------------------------------------------ Settings */
@@ -98,29 +111,37 @@ export async function savePaymentGatewayAction(formData: FormData): Promise<Acti
     }
   });
 
-  const supabase = createAdminClient();
-  const { data: existing } = await supabase
-    .from('payment_gateways')
-    .select('credentials')
-    .eq('provider', provider)
-    .maybeSingle();
-
-  const merged = { ...((existing as any)?.credentials ?? {}), ...credentials };
-
-  const { error } = await supabase.from('payment_gateways').upsert(
-    {
-      provider,
-      display_name: String(formData.get('display_name') ?? provider),
-      is_enabled: formData.get('is_enabled') === 'on',
-      mode: String(formData.get('mode') ?? 'test'),
-      credentials: merged,
-      instructions: String(formData.get('instructions') ?? '') || null,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'provider' }
+  const existing = await queryOne<{ credentials: unknown }>(
+    `SELECT credentials FROM payment_gateways WHERE provider = ? LIMIT 1`,
+    [provider]
   );
 
-  if (error) return { ok: false, error: error.message };
+  const merged = {
+    ...parseJson<Record<string, string>>(existing?.credentials, {}),
+    ...credentials,
+  };
+
+  const result = await execute(
+    `INSERT INTO payment_gateways (id, provider, display_name, is_enabled, mode, credentials, instructions)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       display_name = VALUES(display_name),
+       is_enabled   = VALUES(is_enabled),
+       mode         = VALUES(mode),
+       credentials  = VALUES(credentials),
+       instructions = VALUES(instructions)`,
+    [
+      uuid(),
+      provider,
+      String(formData.get('display_name') ?? provider),
+      formData.get('is_enabled') === 'on',
+      String(formData.get('mode') ?? 'test'),
+      JSON.stringify(merged),
+      String(formData.get('instructions') ?? '') || null,
+    ]
+  );
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the gateway.' };
 
   await recordAudit({
     actorId: user.id,
@@ -152,17 +173,24 @@ export async function updateUserAction(formData: FormData): Promise<ActionResult
     return { ok: false, error: 'You cannot change your own role.' };
   }
 
-  const supabase = createAdminClient();
-  const { error } = await supabase
-    .from('profiles')
-    .update({
-      role,
-      status,
-      suspended_reason: String(formData.get('suspended_reason') ?? '') || null,
-    })
-    .eq('id', userId);
+  const target = await queryOne<{ role: string }>(`SELECT role FROM profiles WHERE id = ? LIMIT 1`, [
+    userId,
+  ]);
+  if (target?.role === 'superadmin' && user.profile.role !== 'superadmin') {
+    return { ok: false, error: 'Only a superadmin can change a superadmin.' };
+  }
 
-  if (error) return { ok: false, error: error.message };
+  const result = await execute(
+    `UPDATE profiles SET role = ?, status = ?, suspended_reason = ? WHERE id = ?`,
+    [role, status, String(formData.get('suspended_reason') ?? '') || null, userId]
+  );
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not update the user.' };
+
+  // A suspended or banned account loses every active session immediately.
+  if (status === 'suspended' || status === 'banned') {
+    await execute(`DELETE FROM sessions WHERE user_id = ?`, [userId]);
+  }
 
   await recordAudit({
     actorId: user.id,
@@ -182,23 +210,22 @@ export async function deleteUserAction(userId: string): Promise<ActionResult> {
   if (!user) return { ok: false, error: 'Admin access required.' };
   if (userId === user.id) return { ok: false, error: 'You cannot delete your own account here.' };
 
-  const supabase = createAdminClient();
-  const { data: target } = await supabase
-    .from('profiles')
-    .select('role, email')
-    .eq('id', userId)
-    .maybeSingle();
-
-  if ((target as any)?.role === 'superadmin' && user.profile.role !== 'superadmin') {
+  const target = await queryOne<{ role: string; email: string }>(
+    `SELECT role, email FROM profiles WHERE id = ? LIMIT 1`,
+    [userId]
+  );
+  if (!target) return { ok: false, error: 'User not found.' };
+  if (target.role === 'superadmin' && user.profile.role !== 'superadmin') {
     return { ok: false, error: 'Only a superadmin can delete a superadmin.' };
   }
 
-  const { error } = await supabase.auth.admin.deleteUser(userId);
-  if (error) {
-    await supabase
-      .from('profiles')
-      .update({ status: 'pending_deletion', deleted_at: new Date().toISOString() })
-      .eq('id', userId);
+  // `users` cascades into profiles and every couple-scoped table.
+  const result = await execute(`DELETE FROM users WHERE id = ?`, [userId]);
+  if (!result.ok) {
+    await execute(`UPDATE profiles SET status = 'pending_deletion', deleted_at = ? WHERE id = ?`, [
+      nowSql(),
+      userId,
+    ]);
   }
 
   await recordAudit({
@@ -207,45 +234,91 @@ export async function deleteUserAction(userId: string): Promise<ActionResult> {
     action: 'admin.user.delete',
     entityType: 'profile',
     entityId: userId,
-    summary: `Deleted ${(target as any)?.email ?? userId}`,
+    summary: `Deleted ${target.email}`,
   });
 
   revalidatePath('/admin/users');
+  revalidatePath('/admin/couples');
   return { ok: true, message: 'User deleted.' };
 }
 
+/**
+ * Issues a single-use password-reset link an admin can hand to a member who
+ * cannot receive email. It never signs the admin in as the user, and its use is
+ * recorded in the audit log.
+ */
 export async function impersonationLinkAction(userId: string): Promise<ActionResult> {
   const user = await requireAdmin();
-  if (!user || user.profile.role !== 'superadmin') {
-    return { ok: false, error: 'Superadmin access required.' };
+  if (!user) return { ok: false, error: 'Admin access required.' };
+
+  const profile = await queryOne<{ email: string; role: string }>(
+    `SELECT email, role FROM profiles WHERE id = ? LIMIT 1`,
+    [userId]
+  );
+  if (!profile) return { ok: false, error: 'User not found.' };
+  if (profile.role === 'superadmin' && user.profile.role !== 'superadmin') {
+    return { ok: false, error: 'Only a superadmin can do this for a superadmin.' };
   }
 
-  const supabase = createAdminClient();
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('email')
-    .eq('id', userId)
-    .maybeSingle();
+  const token = randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
 
-  if (!profile) return { ok: false, error: 'User not found.' };
-
-  const { data, error } = await supabase.auth.admin.generateLink({
-    type: 'magiclink',
-    email: (profile as any).email,
-  });
-
-  if (error) return { ok: false, error: error.message };
+  await execute(`DELETE FROM auth_tokens WHERE user_id = ? AND kind = 'reset'`, [userId]);
+  const created = await execute(
+    `INSERT INTO auth_tokens (id, user_id, kind, token_hash, expires_at) VALUES (?, ?, 'reset', ?, ?)`,
+    [uuid(), userId, hashToken(token), toMysqlDateTime(expiresAt)]
+  );
+  if (!created.ok) return { ok: false, error: created.error ?? 'Could not create the link.' };
 
   await recordAudit({
     actorId: user.id,
     actorEmail: user.email,
-    action: 'admin.user.magiclink',
+    action: 'admin.user.reset_link',
     entityType: 'profile',
     entityId: userId,
-    summary: 'Generated a one-time sign-in link for support',
+    summary: `Generated a one-hour password reset link for ${profile.email}`,
   });
 
-  return { ok: true, data: (data as any)?.properties?.action_link ?? null };
+  return { ok: true, data: `${SITE_URL}/reset-password?token=${token}` };
+}
+
+/** Sets a member's password directly, for support requests. */
+export async function adminSetPasswordAction(
+  userId: string,
+  newPassword: string
+): Promise<ActionResult> {
+  const user = await requireAdmin();
+  if (!user) return { ok: false, error: 'Admin access required.' };
+  if (newPassword.length < 8) return { ok: false, error: 'Use at least 8 characters.' };
+
+  const profile = await queryOne<{ email: string; role: string }>(
+    `SELECT email, role FROM profiles WHERE id = ? LIMIT 1`,
+    [userId]
+  );
+  if (!profile) return { ok: false, error: 'User not found.' };
+  if (profile.role === 'superadmin' && user.profile.role !== 'superadmin') {
+    return { ok: false, error: 'Only a superadmin can do this for a superadmin.' };
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 12);
+  const result = await execute(`UPDATE users SET password_hash = ? WHERE id = ?`, [
+    passwordHash,
+    userId,
+  ]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not set the password.' };
+
+  await execute(`DELETE FROM sessions WHERE user_id = ?`, [userId]);
+
+  await recordAudit({
+    actorId: user.id,
+    actorEmail: user.email,
+    action: 'admin.user.password_set',
+    entityType: 'profile',
+    entityId: userId,
+    summary: `Reset the password for ${profile.email}`,
+  });
+
+  return { ok: true, message: 'Password set. Every session for that account was signed out.' };
 }
 
 /* ---------------------------------------------------------------- Plans */
@@ -267,40 +340,52 @@ export async function savePlanAction(formData: FormData): Promise<ActionResult> 
     return { ok: false, error: 'Limits must be valid JSON.' };
   }
 
-  const payload = {
-    slug: slugify(String(formData.get('slug') ?? '')),
-    name: String(formData.get('name') ?? '').trim(),
-    tagline: String(formData.get('tagline') ?? '').trim() || null,
-    description: String(formData.get('description') ?? '').trim() || null,
-    tier: Number(formData.get('tier') ?? 0),
-    is_active: formData.get('is_active') === 'on',
-    is_featured: formData.get('is_featured') === 'on',
-    is_free: formData.get('is_free') === 'on',
-    trial_days: Number(formData.get('trial_days') ?? 0),
-    sort_order: Number(formData.get('sort_order') ?? 0),
-    badge: String(formData.get('badge') ?? '').trim() || null,
-    features,
-    limits,
-  };
+  const slug = slugify(String(formData.get('slug') ?? ''));
+  const name = String(formData.get('name') ?? '').trim();
+  if (!slug || !name) return { ok: false, error: 'Slug and name are required.' };
 
-  if (!payload.slug || !payload.name) {
-    return { ok: false, error: 'Slug and name are required.' };
-  }
+  const values = [
+    slug,
+    name,
+    String(formData.get('tagline') ?? '').trim() || null,
+    String(formData.get('description') ?? '').trim() || null,
+    Number(formData.get('tier') ?? 0),
+    formData.get('is_active') === 'on',
+    formData.get('is_featured') === 'on',
+    formData.get('is_free') === 'on',
+    Number(formData.get('trial_days') ?? 0),
+    Number(formData.get('sort_order') ?? 0),
+    String(formData.get('badge') ?? '').trim() || null,
+    JSON.stringify(features),
+    JSON.stringify(limits),
+  ];
 
-  const supabase = createAdminClient();
-  const { error } = id
-    ? await supabase.from('plans').update(payload).eq('id', id)
-    : await supabase.from('plans').insert(payload);
+  const result = id
+    ? await execute(
+        `UPDATE plans
+            SET slug = ?, name = ?, tagline = ?, description = ?, tier = ?, is_active = ?,
+                is_featured = ?, is_free = ?, trial_days = ?, sort_order = ?, badge = ?,
+                features = ?, limits = ?
+          WHERE id = ?`,
+        [...values, id]
+      )
+    : await execute(
+        `INSERT INTO plans
+           (id, slug, name, tagline, description, tier, is_active, is_featured, is_free,
+            trial_days, sort_order, badge, features, limits)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [uuid(), ...values]
+      );
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the plan.' };
 
   await recordAudit({
     actorId: user.id,
     actorEmail: user.email,
     action: id ? 'admin.plan.update' : 'admin.plan.create',
     entityType: 'plan',
-    entityId: id || payload.slug,
-    summary: `Saved plan ${payload.name}`,
+    entityId: id || slug,
+    summary: `Saved plan ${name}`,
   });
 
   revalidatePath('/admin/plans');
@@ -312,27 +397,34 @@ export async function savePlanPriceAction(formData: FormData): Promise<ActionRes
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
 
-  const payload = {
-    plan_id: String(formData.get('plan_id') ?? ''),
-    currency: String(formData.get('currency') ?? 'USD').toUpperCase(),
-    interval: String(formData.get('interval') ?? 'month'),
-    amount_cents: Math.round(Number(formData.get('amount') ?? 0) * 100),
-    compare_at_cents: formData.get('compare_at')
-      ? Math.round(Number(formData.get('compare_at')) * 100)
-      : null,
-    stripe_price_id: String(formData.get('stripe_price_id') ?? '').trim() || null,
-    paypal_plan_id: String(formData.get('paypal_plan_id') ?? '').trim() || null,
-    is_active: formData.get('is_active') !== 'off',
-  };
+  const planId = String(formData.get('plan_id') ?? '');
+  if (!planId) return { ok: false, error: 'Missing plan.' };
 
-  if (!payload.plan_id) return { ok: false, error: 'Missing plan.' };
+  const result = await execute(
+    `INSERT INTO plan_prices
+       (id, plan_id, currency, billing_interval, amount_cents, compare_at_cents,
+        stripe_price_id, paypal_plan_id, is_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       amount_cents     = VALUES(amount_cents),
+       compare_at_cents = VALUES(compare_at_cents),
+       stripe_price_id  = VALUES(stripe_price_id),
+       paypal_plan_id   = VALUES(paypal_plan_id),
+       is_active        = VALUES(is_active)`,
+    [
+      uuid(),
+      planId,
+      String(formData.get('currency') ?? 'USD').toUpperCase(),
+      String(formData.get('interval') ?? 'month'),
+      Math.round(Number(formData.get('amount') ?? 0) * 100),
+      formData.get('compare_at') ? Math.round(Number(formData.get('compare_at')) * 100) : null,
+      String(formData.get('stripe_price_id') ?? '').trim() || null,
+      String(formData.get('paypal_plan_id') ?? '').trim() || null,
+      formData.get('is_active') !== 'off',
+    ]
+  );
 
-  const supabase = createAdminClient();
-  const { error } = await supabase
-    .from('plan_prices')
-    .upsert(payload, { onConflict: 'plan_id,currency,interval' });
-
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the price.' };
 
   revalidatePath('/admin/plans');
   revalidatePath('/pricing');
@@ -343,22 +435,22 @@ export async function deletePlanAction(planId: string): Promise<ActionResult> {
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
 
-  const supabase = createAdminClient();
-  const { count } = await supabase
-    .from('subscriptions')
-    .select('id', { count: 'exact', head: true })
-    .eq('plan_id', planId)
-    .in('status', ['active', 'trialing']);
+  const row = await queryOne<{ total: number }>(
+    `SELECT COUNT(*) AS total FROM subscriptions
+      WHERE plan_id = ? AND status IN ('active','trialing')`,
+    [planId]
+  );
 
-  if ((count ?? 0) > 0) {
+  const count = Number(row?.total ?? 0);
+  if (count > 0) {
     return {
       ok: false,
       error: `${count} active subscription(s) use this plan. Deactivate it instead of deleting.`,
     };
   }
 
-  const { error } = await supabase.from('plans').delete().eq('id', planId);
-  if (error) return { ok: false, error: error.message };
+  const result = await execute(`DELETE FROM plans WHERE id = ?`, [planId]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the plan.' };
 
   revalidatePath('/admin/plans');
   revalidatePath('/pricing');
@@ -371,28 +463,42 @@ export async function saveCouponAction(formData: FormData): Promise<ActionResult
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
 
-  const payload = {
-    code: String(formData.get('code') ?? '').trim().toUpperCase(),
-    description: String(formData.get('description') ?? '').trim() || null,
-    discount_type: String(formData.get('discount_type') ?? 'percent'),
-    percent_off: formData.get('percent_off') ? Number(formData.get('percent_off')) : null,
-    amount_off_cents: formData.get('amount_off')
-      ? Math.round(Number(formData.get('amount_off')) * 100)
-      : null,
-    currency: String(formData.get('currency') ?? '') || null,
-    duration: String(formData.get('duration') ?? 'once'),
-    max_redemptions: formData.get('max_redemptions')
-      ? Number(formData.get('max_redemptions'))
-      : null,
-    expires_at: String(formData.get('expires_at') ?? '') || null,
-    is_active: formData.get('is_active') === 'on',
-  };
+  const code = String(formData.get('code') ?? '')
+    .trim()
+    .toUpperCase();
+  if (!code) return { ok: false, error: 'A coupon code is required.' };
 
-  if (!payload.code) return { ok: false, error: 'A coupon code is required.' };
+  const result = await execute(
+    `INSERT INTO coupons
+       (id, code, description, discount_type, percent_off, amount_off_cents, currency,
+        duration, max_redemptions, expires_at, is_active)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       description      = VALUES(description),
+       discount_type    = VALUES(discount_type),
+       percent_off      = VALUES(percent_off),
+       amount_off_cents = VALUES(amount_off_cents),
+       currency         = VALUES(currency),
+       duration         = VALUES(duration),
+       max_redemptions  = VALUES(max_redemptions),
+       expires_at       = VALUES(expires_at),
+       is_active        = VALUES(is_active)`,
+    [
+      uuid(),
+      code,
+      String(formData.get('description') ?? '').trim() || null,
+      String(formData.get('discount_type') ?? 'percent'),
+      formData.get('percent_off') ? Number(formData.get('percent_off')) : null,
+      formData.get('amount_off') ? Math.round(Number(formData.get('amount_off')) * 100) : null,
+      String(formData.get('currency') ?? '') || null,
+      String(formData.get('duration') ?? 'once'),
+      formData.get('max_redemptions') ? Number(formData.get('max_redemptions')) : null,
+      toMysqlDateTime(String(formData.get('expires_at') ?? '') || null),
+      formData.get('is_active') === 'on',
+    ]
+  );
 
-  const supabase = createAdminClient();
-  const { error } = await supabase.from('coupons').upsert(payload, { onConflict: 'code' });
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the coupon.' };
 
   revalidatePath('/admin/coupons');
   return { ok: true, message: 'Coupon saved.' };
@@ -402,9 +508,8 @@ export async function deleteCouponAction(couponId: string): Promise<ActionResult
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
 
-  const supabase = createAdminClient();
-  const { error } = await supabase.from('coupons').delete().eq('id', couponId);
-  if (error) return { ok: false, error: error.message };
+  const result = await execute(`DELETE FROM coupons WHERE id = ?`, [couponId]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the coupon.' };
   revalidatePath('/admin/coupons');
   return { ok: true, message: 'Coupon deleted.' };
 }
@@ -422,44 +527,53 @@ export async function saveBlogPostAction(formData: FormData): Promise<ActionResu
 
   if (!title || !slug) return { ok: false, error: 'Title and slug are required.' };
 
-  const payload = {
+  const publishedAt =
+    status === 'published'
+      ? (toMysqlDateTime(String(formData.get('published_at') ?? '') || null) ?? nowSql())
+      : null;
+
+  const values = [
     slug,
     title,
-    excerpt: String(formData.get('excerpt') ?? '').trim() || null,
-    content: String(formData.get('content') ?? ''),
-    cover_image: String(formData.get('cover_image') ?? '').trim() || null,
-    category_id: String(formData.get('category_id') ?? '') || null,
-    author_id: user.id,
-    author_name: String(formData.get('author_name') ?? 'FairCouples Team'),
+    String(formData.get('excerpt') ?? '').trim() || null,
+    String(formData.get('content') ?? ''),
+    String(formData.get('cover_image') ?? '').trim() || null,
+    String(formData.get('category_id') ?? '') || null,
+    user.id,
+    String(formData.get('author_name') ?? 'FairCouples Team'),
     status,
-    is_featured: formData.get('is_featured') === 'on',
-    reading_minutes: Number(formData.get('reading_minutes') ?? 5),
-    tags: String(formData.get('tags') ?? '')
-      .split(',')
-      .map((tag) => tag.trim())
-      .filter(Boolean),
-    keywords: String(formData.get('keywords') ?? '')
-      .split(',')
-      .map((keyword) => keyword.trim())
-      .filter(Boolean),
-    meta_title: String(formData.get('meta_title') ?? '').trim() || null,
-    meta_description: String(formData.get('meta_description') ?? '').trim() || null,
-    canonical_url: String(formData.get('canonical_url') ?? '').trim() || null,
-    og_image: String(formData.get('og_image') ?? '').trim() || null,
-    no_index: formData.get('no_index') === 'on',
-    published_at:
-      status === 'published'
-        ? String(formData.get('published_at') ?? '') || new Date().toISOString()
-        : null,
-    updated_at: new Date().toISOString(),
-  };
+    formData.get('is_featured') === 'on',
+    Number(formData.get('reading_minutes') ?? 5),
+    JSON.stringify(csv(formData, 'tags')),
+    JSON.stringify(csv(formData, 'keywords')),
+    String(formData.get('meta_title') ?? '').trim() || null,
+    String(formData.get('meta_description') ?? '').trim() || null,
+    String(formData.get('canonical_url') ?? '').trim() || null,
+    String(formData.get('og_image') ?? '').trim() || null,
+    formData.get('no_index') === 'on',
+    publishedAt,
+  ];
 
-  const supabase = createAdminClient();
-  const { error } = id
-    ? await supabase.from('blog_posts').update(payload).eq('id', id)
-    : await supabase.from('blog_posts').insert(payload);
+  const result = id
+    ? await execute(
+        `UPDATE blog_posts
+            SET slug = ?, title = ?, excerpt = ?, content = ?, cover_image = ?, category_id = ?,
+                author_id = ?, author_name = ?, status = ?, is_featured = ?, reading_minutes = ?,
+                tags = ?, keywords = ?, meta_title = ?, meta_description = ?, canonical_url = ?,
+                og_image = ?, no_index = ?, published_at = ?
+          WHERE id = ?`,
+        [...values, id]
+      )
+    : await execute(
+        `INSERT INTO blog_posts
+           (id, slug, title, excerpt, content, cover_image, category_id, author_id, author_name,
+            status, is_featured, reading_minutes, tags, keywords, meta_title, meta_description,
+            canonical_url, og_image, no_index, published_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [uuid(), ...values]
+      );
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the post.' };
 
   await recordAudit({
     actorId: user.id,
@@ -473,6 +587,7 @@ export async function saveBlogPostAction(formData: FormData): Promise<ActionResu
   revalidatePath('/admin/blog');
   revalidatePath('/blog');
   revalidatePath(`/blog/${slug}`);
+  revalidatePath('/sitemap.xml');
   return { ok: true, message: 'Post saved.' };
 }
 
@@ -480,9 +595,8 @@ export async function deleteBlogPostAction(postId: string): Promise<ActionResult
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
 
-  const supabase = createAdminClient();
-  const { error } = await supabase.from('blog_posts').delete().eq('id', postId);
-  if (error) return { ok: false, error: error.message };
+  const result = await execute(`DELETE FROM blog_posts WHERE id = ?`, [postId]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the post.' };
 
   revalidatePath('/admin/blog');
   revalidatePath('/blog');
@@ -499,31 +613,39 @@ export async function savePageAction(formData: FormData): Promise<ActionResult> 
 
   if (!title || !slug) return { ok: false, error: 'Title and slug are required.' };
 
-  const payload = {
+  const values = [
     slug,
     title,
-    content: String(formData.get('content') ?? ''),
-    page_type: String(formData.get('page_type') ?? 'legal'),
-    status: String(formData.get('status') ?? 'published'),
-    show_in_footer: formData.get('show_in_footer') === 'on',
-    show_in_header: formData.get('show_in_header') === 'on',
-    meta_title: String(formData.get('meta_title') ?? '').trim() || null,
-    meta_description: String(formData.get('meta_description') ?? '').trim() || null,
-    keywords: String(formData.get('keywords') ?? '')
-      .split(',')
-      .map((keyword) => keyword.trim())
-      .filter(Boolean),
-    no_index: formData.get('no_index') === 'on',
-    sort_order: Number(formData.get('sort_order') ?? 0),
-    updated_at: new Date().toISOString(),
-  };
+    String(formData.get('content') ?? ''),
+    String(formData.get('page_type') ?? 'legal'),
+    String(formData.get('status') ?? 'published'),
+    formData.get('show_in_footer') === 'on',
+    formData.get('show_in_header') === 'on',
+    String(formData.get('meta_title') ?? '').trim() || null,
+    String(formData.get('meta_description') ?? '').trim() || null,
+    JSON.stringify(csv(formData, 'keywords')),
+    formData.get('no_index') === 'on',
+    Number(formData.get('sort_order') ?? 0),
+  ];
 
-  const supabase = createAdminClient();
-  const { error } = id
-    ? await supabase.from('pages').update(payload).eq('id', id)
-    : await supabase.from('pages').insert(payload);
+  const result = id
+    ? await execute(
+        `UPDATE pages
+            SET slug = ?, title = ?, content = ?, page_type = ?, status = ?, show_in_footer = ?,
+                show_in_header = ?, meta_title = ?, meta_description = ?, keywords = ?,
+                no_index = ?, sort_order = ?
+          WHERE id = ?`,
+        [...values, id]
+      )
+    : await execute(
+        `INSERT INTO pages
+           (id, slug, title, content, page_type, status, show_in_footer, show_in_header,
+            meta_title, meta_description, keywords, no_index, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [uuid(), ...values]
+      );
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the page.' };
 
   revalidatePath('/admin/pages');
   revalidatePath(`/${slug}`);
@@ -535,10 +657,10 @@ export async function deletePageAction(pageId: string): Promise<ActionResult> {
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
 
-  const supabase = createAdminClient();
-  const { error } = await supabase.from('pages').delete().eq('id', pageId);
-  if (error) return { ok: false, error: error.message };
+  const result = await execute(`DELETE FROM pages WHERE id = ?`, [pageId]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the page.' };
   revalidatePath('/admin/pages');
+  revalidatePath('/', 'layout');
   return { ok: true, message: 'Page deleted.' };
 }
 
@@ -551,25 +673,34 @@ export async function saveSeoMetaAction(formData: FormData): Promise<ActionResul
   const path = String(formData.get('path') ?? '').trim();
   if (!path.startsWith('/')) return { ok: false, error: 'Path must start with /' };
 
-  const payload = {
-    path,
-    title: String(formData.get('title') ?? '').trim() || null,
-    description: String(formData.get('description') ?? '').trim() || null,
-    keywords: String(formData.get('keywords') ?? '')
-      .split(',')
-      .map((keyword) => keyword.trim())
-      .filter(Boolean),
-    og_image: String(formData.get('og_image') ?? '').trim() || null,
-    canonical_url: String(formData.get('canonical_url') ?? '').trim() || null,
-    robots: String(formData.get('robots') ?? 'index,follow'),
-    priority: Number(formData.get('priority') ?? 0.7),
-    changefreq: String(formData.get('changefreq') ?? 'weekly'),
-    updated_at: new Date().toISOString(),
-  };
+  const result = await execute(
+    `INSERT INTO seo_meta
+       (id, path, title, description, keywords, og_image, canonical_url, robots, priority, changefreq)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       title         = VALUES(title),
+       description   = VALUES(description),
+       keywords      = VALUES(keywords),
+       og_image      = VALUES(og_image),
+       canonical_url = VALUES(canonical_url),
+       robots        = VALUES(robots),
+       priority      = VALUES(priority),
+       changefreq    = VALUES(changefreq)`,
+    [
+      uuid(),
+      path,
+      String(formData.get('title') ?? '').trim() || null,
+      String(formData.get('description') ?? '').trim() || null,
+      JSON.stringify(csv(formData, 'keywords')),
+      String(formData.get('og_image') ?? '').trim() || null,
+      String(formData.get('canonical_url') ?? '').trim() || null,
+      String(formData.get('robots') ?? 'index,follow'),
+      Number(formData.get('priority') ?? 0.7),
+      String(formData.get('changefreq') ?? 'weekly'),
+    ]
+  );
 
-  const supabase = createAdminClient();
-  const { error } = await supabase.from('seo_meta').upsert(payload, { onConflict: 'path' });
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the metadata.' };
 
   revalidatePath('/admin/seo');
   revalidatePath(path);
@@ -580,20 +711,30 @@ export async function saveRedirectAction(formData: FormData): Promise<ActionResu
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
 
-  const payload = {
-    source: String(formData.get('source') ?? '').trim(),
-    destination: String(formData.get('destination') ?? '').trim(),
-    status_code: Number(formData.get('status_code') ?? 301),
-    is_active: formData.get('is_active') !== 'off',
-  };
+  const source = String(formData.get('source') ?? '').trim();
+  const destination = String(formData.get('destination') ?? '').trim();
 
-  if (!payload.source.startsWith('/') || !payload.destination) {
+  if (!source.startsWith('/') || !destination) {
     return { ok: false, error: 'Source must start with / and destination is required.' };
   }
 
-  const supabase = createAdminClient();
-  const { error } = await supabase.from('redirects').upsert(payload, { onConflict: 'source' });
-  if (error) return { ok: false, error: error.message };
+  const result = await execute(
+    `INSERT INTO redirects (id, source, destination, status_code, is_active)
+     VALUES (?, ?, ?, ?, ?)
+     ON DUPLICATE KEY UPDATE
+       destination = VALUES(destination),
+       status_code = VALUES(status_code),
+       is_active   = VALUES(is_active)`,
+    [
+      uuid(),
+      source,
+      destination,
+      Number(formData.get('status_code') ?? 301),
+      formData.get('is_active') !== 'off',
+    ]
+  );
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the redirect.' };
 
   revalidatePath('/admin/seo');
   return { ok: true, message: 'Redirect saved.' };
@@ -602,9 +743,9 @@ export async function saveRedirectAction(formData: FormData): Promise<ActionResu
 export async function deleteRedirectAction(redirectId: string): Promise<ActionResult> {
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
-  const supabase = createAdminClient();
-  const { error } = await supabase.from('redirects').delete().eq('id', redirectId);
-  if (error) return { ok: false, error: error.message };
+
+  const result = await execute(`DELETE FROM redirects WHERE id = ?`, [redirectId]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not remove the redirect.' };
   revalidatePath('/admin/seo');
   return { ok: true, message: 'Redirect removed.' };
 }
@@ -618,20 +759,21 @@ export async function saveEmailTemplateAction(formData: FormData): Promise<Actio
   const slug = String(formData.get('slug') ?? '').trim();
   if (!slug) return { ok: false, error: 'Missing template slug.' };
 
-  const supabase = createAdminClient();
-  const { error } = await supabase
-    .from('email_templates')
-    .update({
-      name: String(formData.get('name') ?? slug),
-      subject: String(formData.get('subject') ?? ''),
-      html_body: String(formData.get('html_body') ?? ''),
-      text_body: String(formData.get('text_body') ?? '') || null,
-      is_active: formData.get('is_active') === 'on',
-      updated_at: new Date().toISOString(),
-    })
-    .eq('slug', slug);
+  const result = await execute(
+    `UPDATE email_templates
+        SET name = ?, subject = ?, html_body = ?, text_body = ?, is_active = ?
+      WHERE slug = ?`,
+    [
+      String(formData.get('name') ?? slug),
+      String(formData.get('subject') ?? ''),
+      String(formData.get('html_body') ?? ''),
+      String(formData.get('text_body') ?? '') || null,
+      formData.get('is_active') === 'on',
+      slug,
+    ]
+  );
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the template.' };
 
   revalidatePath('/admin/emails');
   return { ok: true, message: 'Template saved.' };
@@ -650,27 +792,27 @@ export async function sendTestEmailAction(to: string, template?: string): Promis
       : '<p>Your SMTP configuration works. This is a test email from the FairCouples admin panel.</p>',
     variables: {
       name: 'Admin',
-      confirm_url: 'https://example.com/confirm',
+      confirm_url: `${SITE_URL}/verify-email`,
       inviter_name: 'FairCouples',
-      invite_url: 'https://example.com/invite',
-      reset_url: 'https://example.com/reset',
+      invite_url: `${SITE_URL}/invite/example`,
+      reset_url: `${SITE_URL}/reset-password`,
       plan_name: 'Premium',
       amount: '19.99',
       currency: 'USD',
       next_billing_date: 'in one month',
-      invoice_url: 'https://example.com/invoice',
+      invoice_url: `${SITE_URL}/dashboard/billing`,
       balance_index: '84',
       overall_score: '76',
       verdict: 'Balanced week.',
-      report_url: 'https://example.com/report',
+      report_url: `${SITE_URL}/dashboard/fairness`,
       partner_name: 'Alex',
       destination: 'Santorini',
       days: '14',
-      checklist_url: 'https://example.com/checklist',
+      checklist_url: `${SITE_URL}/dashboard/checklists`,
       couple_name: 'Our space',
       entry_type: 'a fairness entry',
-      link: 'https://example.com',
-      retry_url: 'https://example.com/billing',
+      link: SITE_URL,
+      retry_url: `${SITE_URL}/dashboard/billing`,
     },
   });
 
@@ -698,13 +840,12 @@ export async function updateContactStatusAction(
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
 
-  const supabase = createAdminClient();
-  const { error } = await supabase
-    .from('contact_messages')
-    .update({ status, replied_at: status === 'replied' ? new Date().toISOString() : null })
-    .eq('id', messageId);
+  const result = await execute(
+    `UPDATE contact_messages SET status = ?, replied_at = ? WHERE id = ?`,
+    [status, status === 'replied' ? nowSql() : null, messageId]
+  );
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not update the message.' };
   revalidatePath('/admin/contacts');
   return { ok: true, message: 'Updated.' };
 }
@@ -714,27 +855,38 @@ export async function saveTestimonialAction(formData: FormData): Promise<ActionR
   if (!user) return { ok: false, error: 'Admin access required.' };
 
   const id = String(formData.get('id') ?? '');
-  const payload = {
-    author_name: String(formData.get('author_name') ?? '').trim(),
-    author_role: String(formData.get('author_role') ?? '').trim() || null,
-    author_location: String(formData.get('author_location') ?? '').trim() || null,
-    quote: String(formData.get('quote') ?? '').trim(),
-    rating: Number(formData.get('rating') ?? 5),
-    is_featured: formData.get('is_featured') === 'on',
-    is_active: formData.get('is_active') === 'on',
-    sort_order: Number(formData.get('sort_order') ?? 0),
-  };
+  const authorName = String(formData.get('author_name') ?? '').trim();
+  const quote = String(formData.get('quote') ?? '').trim();
 
-  if (!payload.author_name || !payload.quote) {
-    return { ok: false, error: 'Name and quote are required.' };
-  }
+  if (!authorName || !quote) return { ok: false, error: 'Name and quote are required.' };
 
-  const supabase = createAdminClient();
-  const { error } = id
-    ? await supabase.from('testimonials').update(payload).eq('id', id)
-    : await supabase.from('testimonials').insert(payload);
+  const values = [
+    authorName,
+    String(formData.get('author_role') ?? '').trim() || null,
+    String(formData.get('author_location') ?? '').trim() || null,
+    quote,
+    Number(formData.get('rating') ?? 5),
+    formData.get('is_featured') === 'on',
+    formData.get('is_active') === 'on',
+    Number(formData.get('sort_order') ?? 0),
+  ];
 
-  if (error) return { ok: false, error: error.message };
+  const result = id
+    ? await execute(
+        `UPDATE testimonials
+            SET author_name = ?, author_role = ?, author_location = ?, quote = ?, rating = ?,
+                is_featured = ?, is_active = ?, sort_order = ?
+          WHERE id = ?`,
+        [...values, id]
+      )
+    : await execute(
+        `INSERT INTO testimonials
+           (id, author_name, author_role, author_location, quote, rating, is_featured, is_active, sort_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [uuid(), ...values]
+      );
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the testimonial.' };
   revalidatePath('/admin/content');
   revalidatePath('/');
   return { ok: true, message: 'Testimonial saved.' };
@@ -745,25 +897,33 @@ export async function saveFaqAction(formData: FormData): Promise<ActionResult> {
   if (!user) return { ok: false, error: 'Admin access required.' };
 
   const id = String(formData.get('id') ?? '');
-  const payload = {
-    question: String(formData.get('question') ?? '').trim(),
-    answer: String(formData.get('answer') ?? '').trim(),
-    category: String(formData.get('category') ?? 'general'),
-    page_path: String(formData.get('page_path') ?? '').trim() || null,
-    sort_order: Number(formData.get('sort_order') ?? 0),
-    is_active: formData.get('is_active') === 'on',
-  };
+  const question = String(formData.get('question') ?? '').trim();
+  const answer = String(formData.get('answer') ?? '').trim();
 
-  if (!payload.question || !payload.answer) {
-    return { ok: false, error: 'Question and answer are required.' };
-  }
+  if (!question || !answer) return { ok: false, error: 'Question and answer are required.' };
 
-  const supabase = createAdminClient();
-  const { error } = id
-    ? await supabase.from('faqs').update(payload).eq('id', id)
-    : await supabase.from('faqs').insert(payload);
+  const values = [
+    question,
+    answer,
+    String(formData.get('category') ?? 'general'),
+    String(formData.get('page_path') ?? '').trim() || null,
+    Number(formData.get('sort_order') ?? 0),
+    formData.get('is_active') === 'on',
+  ];
 
-  if (error) return { ok: false, error: error.message };
+  const result = id
+    ? await execute(
+        `UPDATE faqs SET question = ?, answer = ?, category = ?, page_path = ?, sort_order = ?, is_active = ?
+          WHERE id = ?`,
+        [...values, id]
+      )
+    : await execute(
+        `INSERT INTO faqs (id, question, answer, category, page_path, sort_order, is_active)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [uuid(), ...values]
+      );
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the FAQ.' };
   revalidatePath('/admin/content');
   revalidatePath('/faq');
   return { ok: true, message: 'FAQ saved.' };
@@ -773,16 +933,94 @@ export async function deleteRowAction(table: string, id: string): Promise<Action
   const user = await requireAdmin();
   if (!user) return { ok: false, error: 'Admin access required.' };
 
+  // The table name is interpolated, so only this fixed allow-list may be used.
   const allowed = ['testimonials', 'faqs', 'contact_messages', 'newsletter_subscribers'];
   if (!allowed.includes(table)) return { ok: false, error: 'Not allowed.' };
 
-  const supabase = createAdminClient();
-  const { error } = await supabase.from(table).delete().eq('id', id);
-  if (error) return { ok: false, error: error.message };
+  const result = await execute(`DELETE FROM ${table} WHERE id = ?`, [id]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the row.' };
 
   revalidatePath('/admin/content');
   revalidatePath('/admin/contacts');
   return { ok: true, message: 'Deleted.' };
+}
+
+/* ------------------------------------------------------------- Destinations */
+
+export async function saveDestinationAction(formData: FormData): Promise<ActionResult> {
+  const user = await requireAdmin();
+  if (!user) return { ok: false, error: 'Admin access required.' };
+
+  const id = String(formData.get('id') ?? '');
+  const name = String(formData.get('name') ?? '').trim();
+  const slug = slugify(String(formData.get('slug') ?? '') || name);
+  const countryCode = String(formData.get('country_code') ?? '')
+    .trim()
+    .toUpperCase();
+
+  if (!name || !slug || countryCode.length !== 2) {
+    return { ok: false, error: 'Name, slug and a two-letter country code are required.' };
+  }
+
+  const values = [
+    countryCode,
+    name,
+    slug,
+    String(formData.get('city') ?? '').trim() || null,
+    String(formData.get('destination_type') ?? 'city'),
+    String(formData.get('summary') ?? '').trim() || null,
+    String(formData.get('description') ?? '').trim() || null,
+    String(formData.get('hero_image') ?? '').trim() || null,
+    formData.get('avg_daily_cost_usd') ? Number(formData.get('avg_daily_cost_usd')) : null,
+    formData.get('honeymoon_score') ? Number(formData.get('honeymoon_score')) : null,
+    formData.get('romance_score') ? Number(formData.get('romance_score')) : null,
+    String(formData.get('budget_level') ?? '') || null,
+    formData.get('ideal_days') ? Number(formData.get('ideal_days')) : null,
+    JSON.stringify(csv(formData, 'tags')),
+    formData.get('is_honeymoon') === 'on',
+    formData.get('is_featured') === 'on',
+    formData.get('is_active') !== 'off',
+    String(formData.get('meta_title') ?? '').trim() || null,
+    String(formData.get('meta_description') ?? '').trim() || null,
+  ];
+
+  const result = id
+    ? await execute(
+        `UPDATE destinations
+            SET country_code = ?, name = ?, slug = ?, city = ?, destination_type = ?, summary = ?,
+                description = ?, hero_image = ?, avg_daily_cost_usd = ?, honeymoon_score = ?,
+                romance_score = ?, budget_level = ?, ideal_days = ?, tags = ?, is_honeymoon = ?,
+                is_featured = ?, is_active = ?, meta_title = ?, meta_description = ?
+          WHERE id = ?`,
+        [...values, id]
+      )
+    : await execute(
+        `INSERT INTO destinations
+           (id, country_code, name, slug, city, destination_type, summary, description, hero_image,
+            avg_daily_cost_usd, honeymoon_score, romance_score, budget_level, ideal_days, tags,
+            is_honeymoon, is_featured, is_active, meta_title, meta_description)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [uuid(), ...values]
+      );
+
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not save the destination.' };
+
+  revalidatePath('/admin/destinations');
+  revalidatePath('/destinations');
+  revalidatePath(`/destinations/${slug}`);
+  return { ok: true, message: 'Destination saved.' };
+}
+
+export async function deleteDestinationAction(destinationId: string): Promise<ActionResult> {
+  const user = await requireAdmin();
+  if (!user) return { ok: false, error: 'Admin access required.' };
+
+  const result = await execute(`DELETE FROM destinations WHERE id = ?`, [destinationId]);
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not delete the destination.' };
+
+  revalidatePath('/admin/destinations');
+  revalidatePath('/destinations');
+  return { ok: true, message: 'Destination deleted.' };
 }
 
 /* -------------------------------------------------------------- Subscriptions */
@@ -793,19 +1031,20 @@ export async function adminUpdateSubscriptionAction(formData: FormData): Promise
 
   const id = String(formData.get('id') ?? '');
   const status = String(formData.get('status') ?? 'active');
-  const periodEnd = String(formData.get('current_period_end') ?? '');
+  const periodEnd = toMysqlDateTime(String(formData.get('current_period_end') ?? '') || null);
 
-  const supabase = createAdminClient();
-  const { error } = await supabase
-    .from('subscriptions')
-    .update({
-      status,
-      current_period_end: periodEnd ? new Date(periodEnd).toISOString() : undefined,
-      notes: String(formData.get('notes') ?? '') || null,
-    })
-    .eq('id', id);
+  const result = periodEnd
+    ? await execute(
+        `UPDATE subscriptions SET status = ?, current_period_end = ?, notes = ? WHERE id = ?`,
+        [status, periodEnd, String(formData.get('notes') ?? '') || null, id]
+      )
+    : await execute(`UPDATE subscriptions SET status = ?, notes = ? WHERE id = ?`, [
+        status,
+        String(formData.get('notes') ?? '') || null,
+        id,
+      ]);
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not update the subscription.' };
 
   await recordAudit({
     actorId: user.id,
@@ -834,30 +1073,29 @@ export async function grantPlanAction(formData: FormData): Promise<ActionResult>
   const end = new Date(start);
   end.setMonth(end.getMonth() + months);
 
-  const supabase = createAdminClient();
-  const { data: membership } = await supabase
-    .from('couple_members')
-    .select('couple_id')
-    .eq('user_id', userId)
-    .is('removed_at', null)
-    .limit(1)
-    .maybeSingle();
+  const membership = await queryOne<{ couple_id: string }>(
+    `SELECT couple_id FROM couple_members WHERE user_id = ? AND removed_at IS NULL LIMIT 1`,
+    [userId]
+  );
 
-  const { error } = await supabase.from('subscriptions').insert({
-    user_id: userId,
-    couple_id: (membership as any)?.couple_id ?? null,
-    plan_id: planId,
-    provider: 'manual',
-    provider_subscription_id: `manual-${userId}-${Date.now()}`,
-    status: 'active',
-    interval: 'month',
-    amount_cents: 0,
-    current_period_start: start.toISOString(),
-    current_period_end: end.toISOString(),
-    notes: `Granted by ${user.email}`,
-  });
+  const result = await execute(
+    `INSERT INTO subscriptions
+       (id, user_id, couple_id, plan_id, provider, provider_subscription_id, status,
+        billing_interval, amount_cents, current_period_start, current_period_end, notes)
+     VALUES (?, ?, ?, ?, 'manual', ?, 'active', 'month', 0, ?, ?, ?)`,
+    [
+      uuid(),
+      userId,
+      membership?.couple_id ?? null,
+      planId,
+      `manual-${userId}-${Date.now()}`,
+      toMysqlDateTime(start),
+      toMysqlDateTime(end),
+      `Granted by ${user.email}`,
+    ]
+  );
 
-  if (error) return { ok: false, error: error.message };
+  if (!result.ok) return { ok: false, error: result.error ?? 'Could not grant the plan.' };
 
   await recordAudit({
     actorId: user.id,
@@ -870,4 +1108,22 @@ export async function grantPlanAction(formData: FormData): Promise<ActionResult>
 
   revalidatePath('/admin/subscriptions');
   return { ok: true, message: `Plan granted for ${months} months.` };
+}
+
+/** Powers the admin dashboard's headline numbers. */
+export async function adminStatsAction(): Promise<ActionResult> {
+  const user = await requireAdmin();
+  if (!user) return { ok: false, error: 'Admin access required.' };
+
+  const rows = await query<{ metric: string; total: number }>(
+    `SELECT 'users' AS metric, COUNT(*) AS total FROM profiles WHERE deleted_at IS NULL
+     UNION ALL SELECT 'couples', COUNT(*) FROM couples
+     UNION ALL SELECT 'active_subs', COUNT(*) FROM subscriptions WHERE status IN ('active','trialing')
+     UNION ALL SELECT 'contacts_new', COUNT(*) FROM contact_messages WHERE status = 'new'`
+  );
+
+  return {
+    ok: true,
+    data: Object.fromEntries(rows.map((row) => [row.metric, Number(row.total)])),
+  };
 }

@@ -40,6 +40,7 @@ jobs:
         run: npm run build
         env:
           # Public values only — the build must succeed without live secrets.
-          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL || 'https://faircouples.com' }}
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL || 'https://grey-opossum-178268.hostingersite.com' }}
+          # No database is reachable in CI; the app degrades to empty reads,
+          # so the build only needs a signing secret to be present.
+          AUTH_SECRET: ci-build-secret-not-used-at-runtime-000000

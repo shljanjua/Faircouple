@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { getSessionUser, getEntitlements } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { Alert, Badge, Card, Progress, Table, Td, Th } from '@/components/ui';
@@ -21,23 +21,19 @@ export default async function BillingPage({
 }) {
   const user = await getSessionUser();
   const entitlements = await getEntitlements();
-  const supabase = createClient();
-
-  const [{ data: subscriptions }, { data: payments }] = await Promise.all([
-    supabase
-      .from('subscriptions')
-      .select('*, plan:plans(name, slug, tagline)')
-      .eq('user_id', user!.id)
-      .order('created_at', { ascending: false }),
-    supabase
-      .from('payments')
-      .select('*')
-      .eq('user_id', user!.id)
-      .order('created_at', { ascending: false })
-      .limit(24),
+  const [subscriptions, payments] = await Promise.all([
+    query<any>(
+      `SELECT s.*, s.billing_interval AS \`interval\`, p.name AS plan_name
+         FROM subscriptions s JOIN plans p ON p.id = s.plan_id
+        WHERE s.user_id = ? ORDER BY s.created_at DESC`,
+      [user!.id]
+    ),
+    query<any>(`SELECT * FROM payments WHERE user_id = ? ORDER BY created_at DESC LIMIT 24`, [
+      user!.id,
+    ]),
   ]);
 
-  const active = ((subscriptions ?? []) as any[]).find((subscription) =>
+  const active = subscriptions.find((subscription) =>
     ['active', 'trialing', 'past_due'].includes(subscription.status)
   );
 
@@ -140,7 +136,7 @@ export default async function BillingPage({
 
       <Card className="p-5">
         <h2 className="font-semibold">Payment history</h2>
-        {payments && payments.length > 0 ? (
+        {payments.length > 0 ? (
           <div className="mt-4">
             <Table>
               <thead>
@@ -154,7 +150,7 @@ export default async function BillingPage({
                 </tr>
               </thead>
               <tbody>
-                {payments.map((payment: any) => (
+                {payments.map((payment) => (
                   <tr key={payment.id}>
                     <Td className="text-muted-foreground">{formatDate(payment.created_at)}</Td>
                     <Td>{payment.description ?? '—'}</Td>

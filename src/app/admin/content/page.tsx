@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createAdminClient } from '@/lib/supabase/server';
+import { query } from '@/lib/db';
 import { buildMetadata } from '@/lib/seo';
 import { deleteRowAction, saveFaqAction, saveTestimonialAction } from '@/app/actions/admin';
 import { ActionButton, AdminForm } from '@/components/admin/form-shell';
@@ -12,10 +12,9 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export default async function AdminContentPage() {
-  const supabase = createAdminClient();
-  const [{ data: faqs }, { data: testimonials }] = await Promise.all([
-    supabase.from('faqs').select('*').order('sort_order'),
-    supabase.from('testimonials').select('*').order('sort_order'),
+  const [faqs, testimonials] = await Promise.all([
+    query<any>(`SELECT * FROM faqs ORDER BY sort_order ASC`),
+    query<any>(`SELECT * FROM testimonials ORDER BY sort_order ASC`),
   ]);
 
   return (
@@ -127,7 +126,7 @@ export default async function AdminContentPage() {
               </tr>
             </thead>
             <tbody>
-              {((faqs ?? []) as any[]).map((faq) => (
+              {faqs.map((faq) => (
                 <tr key={faq.id}>
                   <Td className="max-w-md">
                     <span className="font-medium">{faq.question}</span>
@@ -169,7 +168,7 @@ export default async function AdminContentPage() {
               </tr>
             </thead>
             <tbody>
-              {((testimonials ?? []) as any[]).map((testimonial) => (
+              {testimonials.map((testimonial) => (
                 <tr key={testimonial.id}>
                   <Td>
                     <span className="font-medium">{testimonial.author_name}</span>

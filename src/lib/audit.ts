@@ -1,5 +1,6 @@
+import 'server-only';
 import { headers } from 'next/headers';
-import { createAdminClient } from '@/lib/supabase/server';
+import { execute, uuid } from '@/lib/db';
 
 export interface AuditInput {
   actorId?: string | null;
@@ -14,21 +15,25 @@ export interface AuditInput {
 export async function recordAudit(input: AuditInput) {
   try {
     const headerList = headers();
-    const supabase = createAdminClient();
-    await supabase.from('audit_logs').insert({
-      actor_id: input.actorId ?? null,
-      actor_email: input.actorEmail ?? null,
-      action: input.action,
-      entity_type: input.entityType ?? null,
-      entity_id: input.entityId ?? null,
-      summary: input.summary ?? null,
-      changes: input.changes ?? null,
-      ip_address:
+    await execute(
+      `INSERT INTO audit_logs
+         (id, actor_id, actor_email, action, entity_type, entity_id, summary, changes, ip_address, user_agent)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        uuid(),
+        input.actorId ?? null,
+        input.actorEmail ?? null,
+        input.action,
+        input.entityType ?? null,
+        input.entityId ?? null,
+        input.summary ?? null,
+        input.changes ? JSON.stringify(input.changes) : null,
         headerList.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-        headerList.get('x-real-ip') ??
-        null,
-      user_agent: headerList.get('user-agent'),
-    });
+          headerList.get('x-real-ip') ??
+          null,
+        headerList.get('user-agent')?.slice(0, 250) ?? null,
+      ]
+    );
   } catch {
     // Auditing must never break the operation it is recording.
   }
@@ -44,16 +49,20 @@ export async function notifyUser(params: {
   emoji?: string;
 }) {
   try {
-    const supabase = createAdminClient();
-    await supabase.from('notifications').insert({
-      user_id: params.userId,
-      couple_id: params.coupleId ?? null,
-      type: params.type ?? 'system',
-      title: params.title,
-      body: params.body ?? null,
-      link: params.link ?? null,
-      emoji: params.emoji ?? null,
-    });
+    await execute(
+      `INSERT INTO notifications (id, user_id, couple_id, type, title, body, link, emoji)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        uuid(),
+        params.userId,
+        params.coupleId ?? null,
+        params.type ?? 'system',
+        params.title,
+        params.body ?? null,
+        params.link ?? null,
+        params.emoji ?? null,
+      ]
+    );
   } catch {
     // Non-critical.
   }

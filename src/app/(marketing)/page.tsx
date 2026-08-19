@@ -12,7 +12,13 @@ import {
   Sparkles,
   Wallet,
 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/server';
+import {
+  getActivePlans,
+  getDestinations,
+  getFaqs,
+  getPublishedPosts,
+  getTestimonials,
+} from '@/lib/queries';
 import { getPublicSettings } from '@/lib/settings';
 import { buildMetadata, faqSchema, softwareApplicationSchema, howToSchema } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
@@ -102,39 +108,17 @@ const STEPS = [
 ];
 
 export default async function HomePage() {
-  const supabase = createClient();
   const settings = await getPublicSettings();
 
-  const [{ data: plans }, { data: destinations }, { data: testimonials }, { data: faqs }, { data: posts }] =
-    await Promise.all([
-      supabase
-        .from('plans')
-        .select('*, prices:plan_prices(*)')
-        .eq('is_active', true)
-        .order('sort_order'),
-      supabase
-        .from('destinations')
-        .select('name, slug, city, hero_image, summary, honeymoon_score, avg_daily_cost_usd, country_code')
-        .eq('is_featured', true)
-        .eq('is_active', true)
-        .order('popularity', { ascending: false })
-        .limit(6),
-      supabase
-        .from('testimonials')
-        .select('*')
-        .eq('is_active', true)
-        .order('sort_order')
-        .limit(6),
-      supabase.from('faqs').select('question, answer').eq('is_active', true).eq('page_path', '/').order('sort_order').limit(8),
-      supabase
-        .from('blog_posts')
-        .select('slug, title, excerpt, reading_minutes, published_at')
-        .eq('status', 'published')
-        .order('published_at', { ascending: false })
-        .limit(3),
-    ]);
+  const [plans, destinations, testimonials, faqs, posts] = await Promise.all([
+    getActivePlans(),
+    getDestinations({ featuredOnly: true, limit: 6 }),
+    getTestimonials(6),
+    getFaqs({ pagePath: '/', limit: 8 }),
+    getPublishedPosts({ limit: 3 }),
+  ]);
 
-  const paidPrices = (plans ?? [])
+  const paidPrices = plans
     .flatMap((p: any) => p.prices ?? [])
     .filter((price: any) => price.currency === 'USD' && price.interval === 'month' && price.amount_cents > 0)
     .map((price: any) => price.amount_cents / 100);
@@ -155,7 +139,7 @@ export default async function HomePage() {
               'A four-step method for measuring effort, respect and loyalty between two partners.',
             steps: STEPS,
           }),
-          ...(faqs?.length ? [faqSchema(faqs as any)] : []),
+          ...(faqs.length ? [faqSchema(faqs as any)] : []),
         ]}
       />
 
@@ -261,7 +245,7 @@ export default async function HomePage() {
       </section>
 
       {/* ------------------------------------------------------ Destinations */}
-      {destinations && destinations.length > 0 && (
+      {destinations.length > 0 && (
         <section className="border-t border-border bg-secondary/20 py-20">
           <div className="container">
             <SectionHeading
@@ -318,7 +302,7 @@ export default async function HomePage() {
       )}
 
       {/* --------------------------------------------------- Testimonials */}
-      {testimonials && testimonials.length > 0 && (
+      {testimonials.length > 0 && (
         <section className="py-20">
           <div className="container">
             <SectionHeading
@@ -358,13 +342,13 @@ export default async function HomePage() {
             description="Choose your currency at signup — USD, GBP, EUR, CAD or AUD. Cancel any time."
           />
           <div className="mt-12">
-            <PricingTable plans={(plans ?? []) as any} />
+            <PricingTable plans={plans as any} />
           </div>
         </div>
       </section>
 
       {/* ------------------------------------------------------------ Blog */}
-      {posts && posts.length > 0 && (
+      {posts.length > 0 && (
         <section className="py-20">
           <div className="container">
             <SectionHeading eyebrow="From the blog" title="Read before your next conversation" />
@@ -386,7 +370,7 @@ export default async function HomePage() {
       )}
 
       {/* ------------------------------------------------------------- FAQ */}
-      {faqs && faqs.length > 0 && (
+      {faqs.length > 0 && (
         <section className="border-t border-border py-20">
           <div className="container max-w-3xl">
             <SectionHeading eyebrow="FAQ" title="Questions couples ask first" />

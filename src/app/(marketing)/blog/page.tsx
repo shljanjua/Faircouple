@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { createClient } from '@/lib/supabase/server';
+import { getPublishedPosts } from '@/lib/queries';
+import { query } from '@/lib/db';
 import { buildMetadata, breadcrumbSchema, absoluteUrl } from '@/lib/seo';
 import { JsonLd } from '@/components/json-ld';
 import { Badge, Card, SectionHeading } from '@/components/ui';
@@ -24,27 +25,10 @@ export default async function BlogPage({
 }: {
   searchParams: { category?: string };
 }) {
-  const supabase = createClient();
-
-  let query = supabase
-    .from('blog_posts')
-    .select('*, category:blog_categories(slug, name)')
-    .eq('status', 'published')
-    .order('published_at', { ascending: false });
-
-  const { data: categories } = await supabase
-    .from('blog_categories')
-    .select('*')
-    .eq('is_active', true)
-    .order('sort_order');
-
-  if (searchParams.category) {
-    const category = ((categories ?? []) as any[]).find((c) => c.slug === searchParams.category);
-    if (category) query = query.eq('category_id', category.id);
-  }
-
-  const { data: posts } = await query;
-  const list = (posts ?? []) as any[];
+  const [list, categories] = await Promise.all([
+    getPublishedPosts({ categorySlug: searchParams.category }),
+    query<any>(`SELECT * FROM blog_categories WHERE is_active = 1 ORDER BY sort_order ASC`),
+  ]);
   const featured = list.find((post) => post.is_featured) ?? list[0];
   const rest = list.filter((post) => post.id !== featured?.id);
 
@@ -91,7 +75,7 @@ export default async function BlogPage({
             >
               All
             </Link>
-            {((categories ?? []) as any[]).map((category) => (
+            {categories.map((category) => (
               <Link
                 key={category.slug}
                 href={`/blog?category=${category.slug}`}

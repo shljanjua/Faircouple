@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { createClient } from '@/lib/supabase/server';
+import { query, toBool } from '@/lib/db';
 import { getCoupleContext } from '@/lib/auth';
 import { buildMetadata } from '@/lib/seo';
 import { GalleryWorkspace } from '@/components/app/gallery-workspace';
@@ -23,20 +23,17 @@ export default async function GalleryPage() {
     );
   }
 
-  const supabase = createClient();
-  const { data: assets } = await supabase
-    .from('media_assets')
-    .select('*')
-    .eq('couple_id', context.couple.id)
-    .in('kind', ['photo', 'video'])
-    .order('created_at', { ascending: false })
-    .limit(300);
+  const assets = await query<any>(
+    `SELECT * FROM media_assets WHERE couple_id = ? AND kind IN ('photo','video')
+      ORDER BY created_at DESC LIMIT 300`,
+    [context.couple.id]
+  );
 
   return (
     <GalleryWorkspace
       coupleId={context.couple.id}
       meId={context.me.user_id}
-      assets={(assets ?? []) as any[]}
+      assets={assets.map((asset) => ({ ...asset, is_private: toBool(asset.is_private) }))}
     />
   );
 }

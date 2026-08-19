@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Call the cron endpoint
         run: |
-          SITE="${{ vars.NEXT_PUBLIC_SITE_URL || 'https://faircouples.com' }}"
+          SITE="${{ vars.NEXT_PUBLIC_SITE_URL || 'https://grey-opossum-178268.hostingersite.com' }}"
           JOB="${{ github.event.inputs.job || 'all' }}"
           echo "Running job: $JOB"
           RESPONSE=$(curl -sS -w '\n%{http_code}' \
