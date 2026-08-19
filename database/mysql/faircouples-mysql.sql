@@ -1,5 +1,7 @@
 -- ============================================================================
--- FairCouples — complete MySQL 8.0 database (schema + seed data)
+-- FairCouples — complete database (schema + seed data)
+-- Pure PHP + MySQL build for Hostinger SHARED hosting. Runs on MySQL 8 and
+-- MariaDB 10.4+ alike.
 --
 -- Target: Hostinger MySQL.
 --   Database : u237845628_Faircouple
@@ -9,14 +11,21 @@
 -- HOW TO IMPORT
 --   1. hPanel -> Databases -> MySQL Databases: confirm the database and user
 --      above exist, and note the password you set there.
---   2. hPanel -> Databases -> phpMyAdmin: open u237845628_Faircouple.
---   3. Import -> choose this file -> Go.  (Or paste it into the SQL tab.)
---   4. Put the same credentials in the app environment as MYSQL_HOST,
---      MYSQL_DATABASE, MYSQL_USER and MYSQL_PASSWORD.
---   5. Sign up in the app, then run the final statement in this file with your
---      own email address to make yourself superadmin.
---   6. If the Node server runs outside Hostinger, switch on
---      hPanel -> Databases -> Remote MySQL for that server's IP address.
+--   2. hPanel -> Databases -> phpMyAdmin: click the database name on the left
+--      (u237845628_Faircouple) so it is selected.
+--   3. Open the Import tab -> choose this file -> Go.
+--      (Or open the SQL tab and paste the whole file, then Go.)
+--   4. Put the SAME four values into public_html/app/config.php:
+--        'name'     => 'u237845628_Faircouple'
+--        'user'     => 'u237845628_Faircouple'
+--        'password' => the password from step 1
+--        'host'     => 'localhost'   (correct on Hostinger — leave it)
+--   5. Open your site, sign up, then run the final statement in this file with
+--      your own email address to make yourself superadmin.
+--
+-- There is NO Node server and NO environment variables — the app reads its
+-- database credentials only from app/config.php. Remote MySQL is not needed
+-- because PHP runs on the same Hostinger account as the database.
 --
 -- The file is idempotent: every insert either upserts or is guarded, so
 -- re-importing refreshes the reference data without duplicating rows.
@@ -1959,7 +1968,7 @@ Contract (providing the service), legitimate interests (security, product improv
 Entries you mark **private** are never shown to your partner. Everything else in a shared space is visible to both members by design. Removing a partner ends their access immediately.
 
 ## 6. Processors
-Supabase (database, authentication, storage), Stripe and PayPal (payments), our SMTP provider (email), and analytics providers you have consented to.
+Our hosting provider (database, application and file storage), Stripe and PayPal (payments), our SMTP email provider, and any analytics providers you have consented to.
 
 ## 7. International transfers
 Data may be processed in the EU, UK and US under Standard Contractual Clauses or an adequacy decision.
@@ -1971,7 +1980,7 @@ Account data is kept while your account is active and for 30 days after deletion
 Access, rectification, erasure, restriction, portability, objection, and withdrawal of consent. California residents have the right to know, delete, correct and opt out of sale/sharing (we do not sell). Email privacy@faircouples.com — we respond within 30 days.
 
 ## 10. Security
-Encryption in transit and at rest, row-level security isolating every couple''s data, hashed passwords, audited admin access.
+Traffic served over HTTPS, application-level isolation so every request is checked against your session and membership before your data is returned, bcrypt-hashed passwords, and fully audited admin access.
 
 ## 11. Children
 The service is not directed at anyone under 16. We delete such accounts on discovery.
@@ -2386,7 +2395,7 @@ INSERT IGNORE INTO faqs (question, answer, category, page_path, sort_order) VALU
   ('Can I cancel any time?','Yes, from Settings → Billing. You keep access until the end of your paid period, and there is a 14-day money-back guarantee on first purchases.','billing','/pricing',8),
   ('Does this work for relationships that are not romantic?','Yes. A space works for any two people — partners, spouses, a mother and son, siblings or close friends. The fairness framework applies to any relationship where effort should be balanced.','product','/',9),
   ('Can we use it long-distance?','That is the most common use. Both partners log entries independently from different countries and time zones; both see the same report.','product','/',10),
-  ('Is my data secure?','Every couple''s data is isolated at the database level with row-level security. Data is encrypted in transit and at rest, and admin access is fully audited.','privacy','/',11),
+  ('Is my data secure?','Every couple''s space is isolated: each request is checked against your session and your membership before any of your data is returned, and private notes stay private to whoever wrote them. Traffic is served over HTTPS and every admin action is audited.','privacy','/',11),
   ('Is this therapy?','No. FairCouples is a measurement and planning tool, not therapy or counselling. It helps you see patterns clearly — what you do with them is your decision.','product','/',12),
   ('What happens if we break up?','You can remove your partner from the space at any time; their access ends immediately. You can also export or permanently delete your data from Settings → Privacy.','privacy','/',13),
   ('How does the travel planner work?','Pick a destination from our guides, set your dates and pace, and the itinerary generator lays out each day. Upload flight, hotel and attraction tickets to the vault so both of you have them offline, and split the costs fairly in the shared budget.','travel','/features',14);
