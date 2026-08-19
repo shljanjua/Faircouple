@@ -110,6 +110,15 @@ UPDATE profiles SET role = 'superadmin' WHERE email = 'you@your-domain.com';
 
 Sign out and back in. **Admin panel** now appears in your account menu.
 
+> Prefer not to use the signup form? `database/mysql/create-admin.sql` creates a
+> superadmin directly — edit the email and paste a bcrypt hash of your password, then
+> run it in phpMyAdmin.
+
+> **If a page shows an "Unknown column" error** (e.g. `disabled_at`), an earlier import
+> was partial and the schema is out of date. Run `database/mysql/reset.sql` to drop every
+> table, re-import `faircouples-mysql.sql`, and you are back to a clean, correct schema.
+> `reset.sql` deletes all data, so only use it on a fresh install.
+
 ### 6. Set up the cron job
 
 hPanel → **Advanced → Cron Jobs**. Add one job, every 15 minutes:
