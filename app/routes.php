@@ -52,6 +52,8 @@ $router->any('/dashboard/love',         'app/love');
 $router->any('/dashboard/letters',      'app/letters');
 $router->any('/dashboard/story',        'app/story');
 $router->any('/dashboard/bucket',       'app/bucket');
+$router->any('/dashboard/distance',     'app/distance');
+$router->any('/dashboard/challenges',   'app/challenges');
 $router->any('/dashboard/fairness',     'app/fairness');
 $router->any('/dashboard/emotions',     'app/emotions');
 $router->any('/dashboard/checkin',      'app/checkin');
