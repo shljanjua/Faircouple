@@ -82,14 +82,16 @@ final class LoveCare
         'other'      => ['⭐', 'Other'],
     ];
 
-    /** A few evocative starters shown when the bucket list is empty. */
+    /** Evocative starters shown when the bucket list is empty. */
     public const BUCKET_SUGGESTIONS = [
-        ['✈️', 'Visit a city neither of us has seen', 'travel'],
-        ['🌅', 'Watch a sunrise together', 'experience'],
-        ['🍝', 'Cook a meal from another country', 'home'],
-        ['🏔️', 'See the northern lights', 'adventure'],
-        ['📸', 'Take 100 photos on one trip', 'romance'],
-        ['🚗', 'Take a road trip with no fixed plan', 'travel'],
+        ['🌅', 'Watch the sunrise together',   'experience'],
+        ['🗼', 'Visit Paris',                  'travel'],
+        ['🍳', 'Learn to cook together',       'home'],
+        ['🚗', 'Take a road trip',             'travel'],
+        ['🏡', 'Build our dream home',         'home'],
+        ['🏖️', 'Have a beach dinner',          'romance'],
+        ['🏔️', 'See the northern lights',      'adventure'],
+        ['📸', 'Take 100 photos together',     'romance'],
     ];
 
     /** [emoji, label] for a key from any of the maps above, with a safe fallback. */
@@ -166,6 +168,48 @@ final class LoveCare
             $balance >= 35 => ['emoji' => '🌥️', 'label' => 'Needs attention',   'tone' => 'warning'],
             default        => ['emoji' => '🌧️', 'label' => 'Reach for each other', 'tone' => 'danger'],
         };
+    }
+
+    /**
+     * Relationship milestones — a warm, non-childish progress picture. Each
+     * metric shows the couple's current count and the next milestone to reach,
+     * with tiers that grow gently rather than gamifying the relationship.
+     *
+     * @return array<int,array{key:string,emoji:string,label:string,count:int,next:?int,prev:int,maxed:bool}>
+     */
+    public static function milestones(string $coupleId): array
+    {
+        $metrics = [
+            ['streak',       '❤️',  'days connected',        self::streak($coupleId),                                         [7, 14, 30, 50, 100, 180, 365]],
+            ['conversations','💬',  'messages exchanged',    Db::count('messages', 'couple_id = ?', [$coupleId]),             [10, 25, 50, 100, 250, 500]],
+            ['appreciation', '💗',  'little love notes',     Db::count('love_notes', 'couple_id = ?', [$coupleId]),           [10, 25, 50, 100, 250]],
+            ['gratitude',    '🌷',  'gratitude moments',     Db::count('gratitude_notes', 'couple_id = ?', [$coupleId]),      [5, 10, 30, 50, 100]],
+            ['memories',     '📸',  'memories in your story',Db::count('story_milestones', 'couple_id = ?', [$coupleId]),     [5, 10, 25, 50, 100]],
+            ['trips',        '✈️',  'trips planned',         Db::count('trips', 'couple_id = ?', [$coupleId]),                [1, 3, 5, 10, 20]],
+            ['letters',      '💌',  'letters written',       Db::count('open_when_letters', 'couple_id = ?', [$coupleId]),    [3, 5, 10, 25, 50]],
+        ];
+
+        $out = [];
+        foreach ($metrics as [$key, $emoji, $label, $count, $tiers]) {
+            $count = (int) $count;
+            $next = null;
+            $prev = 0;
+            foreach ($tiers as $tier) {
+                if ($count < $tier) { $next = $tier; break; }
+                $prev = $tier;
+            }
+            $out[] = [
+                'key'   => $key,
+                'emoji' => $emoji,
+                'label' => $label,
+                'count' => $count,
+                'next'  => $next,
+                'prev'  => $prev,
+                'maxed' => $next === null,
+            ];
+        }
+
+        return $out;
     }
 
     /** Small counters for the hub header. */
