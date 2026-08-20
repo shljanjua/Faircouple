@@ -5,11 +5,37 @@ Seo::breadcrumbs([['name' => 'Home', 'url' => '/'], ['name' => 'Features', 'url'
 Seo::softwareApplication();
 
 View::begin('layouts/public', [
-    'title'       => 'Features — Fairness Scoring, Emotions, Messaging, Budgets & Travel',
-    'description' => 'Every FairCouples feature: the 10-area fairness framework, emotion tracking for both partners, private messaging, fair expense splitting, gift planner, ticket vault and itinerary generator.',
+    'title'       => 'Features — Love & Care, Letters, Storybook, Fairness, Money & Travel',
+    'description' => 'Every FairCouples feature: the Love & Care hub, Open-when letters, voice notes, Our Story & Storybook, love language, date-night generator, couple challenges, conflict repair, surprise mode and long-distance mode — plus the 10-area fairness engine, fair budgeting and full travel planning.',
 ]);
 
 $groups = [
+    [
+        'title' => 'Love, every day',
+        'lead'  => 'A warm, private home for your relationship — not accounting software.',
+        'items' => [
+            ['❤️', 'Love & Care hub', 'Each of you shares how you feel and what you need today, and sees the other’s side — with a gentle “relationship weather” and a connection streak that reflects your consistency.'],
+            ['💌', 'Send a little love', 'One tap sends “I love you”, “I miss you”, “thinking of you”. Small gestures that arrive as a notification and are kept as a little inbox from their heart.'],
+            ['✉️', 'Open-when letters', 'Write a sealed letter for a moment that hasn’t happened yet — a bad day, an argument, missing you. It stays hidden until they choose to open it.'],
+            ['🌷', 'Gratitude, on purpose', 'A daily “I’m grateful for you because…”, kept as a running record of the good — and counted in your milestones.'],
+            ['🎙️', 'Voice notes', 'Record a message right in the browser — a good-morning, an I-miss-you, a laugh. Stored privately and played back only by the two of you.'],
+            ['🎵', 'Our Soundtrack', 'The songs of you two, tied to the moments — first dance, road trips, late-night talks. Add a link and play them when you like; one is “our song”.'],
+        ],
+    ],
+    [
+        'title' => 'Remember & grow together',
+        'lead'  => 'Keep what matters, and keep getting closer.',
+        'items' => [
+            ['💕', 'Our Story & Storybook', 'A beautiful photo timeline of your milestones, plus a written, co-authored Storybook the two of you fill a chapter at a time, guided by evocative prompts.'],
+            ['🌎', 'Bucket list', 'The things you want to do together — sunrise, Paris, the northern lights — ticked off as you go, with a warm progress bar.'],
+            ['❤️', 'Love-language tool', 'Each of you scores the five languages and flags what you need most right now; the other sees exactly how to love you today.'],
+            ['💞', 'Date-night generator', 'Pick a mood, place, budget and time and get a coherent plan — deterministic, so you can regenerate and save the keepers.'],
+            ['🎯', 'Couple challenges', 'Short guided programmes — a 7-day connection challenge, a 14-day deep-talk, a long-distance closeness week — one prompt a day.'],
+            ['💙', 'Guided conflict repair', 'A calm, five-step way through a disagreement: you each answer the same questions for yourself, then read both sides. Not to win — to understand.'],
+            ['🎁', 'Surprise mode', 'Write something now and schedule it for later; it stays sealed until the exact moment you choose, then unlocks for them.'],
+            ['✈️', 'Long-distance mode', 'Both your local clocks ticking live, how many hours apart you are, and a countdown to the next time you’re together.'],
+        ],
+    ],
     [
         'title' => 'Measure the relationship',
         'lead'  => 'The part nobody else does: two independent sets of answers, compared.',
@@ -86,8 +112,8 @@ $groups = [
     <p class="eyebrow">Features</p>
     <h1>Everything in FairCouples</h1>
     <p class="lead">
-      A measurement tool with the practical planning attached. Here is the whole product,
-      area by area.
+      A private space to love, understand, remember and grow together — with a quiet fairness
+      engine underneath and the practical planning attached. Here is the whole product, area by area.
     </p>
     <div class="row mt-3">
       <a class="btn" href="/signup">Start free</a>

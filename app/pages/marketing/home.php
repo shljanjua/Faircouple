@@ -64,6 +64,45 @@ View::begin('layouts/public', [
   </div>
 </section>
 
+<section class="section" style="background:hsl(var(--secondary) / 0.4)">
+  <div class="container">
+    <h2>More than a relationship app — your little world together</h2>
+    <p class="muted mt-2" style="max-width:62ch">
+      Share how you feel, send a little love, keep your memories and plan your future — with a quiet
+      fairness engine underneath that helps you notice what needs care.
+    </p>
+
+    <div class="grid grid-4 mt-4">
+      <?php
+      $loveFeatures = [
+          ['❤️', 'Love & Care', 'Share your feeling and what you need today — and see your partner’s.'],
+          ['💌', 'Open-when letters', 'Sealed letters for the moment they’re needed — a bad day, missing you.'],
+          ['📖', 'Our Story & Storybook', 'A photo timeline and a written book you author together.'],
+          ['🎙️', 'Voice notes', 'Say it, don’t type it — recorded right in your browser.'],
+          ['🎵', 'Our Soundtrack', 'The songs of you two, tied to the moments.'],
+          ['💞', 'Date-night generator', 'A plan for tonight — mood, budget and time, sorted.'],
+          ['🎯', 'Couple challenges', 'Short guided programmes, one small prompt a day.'],
+          ['🎁', 'Surprise mode', 'Write it now, reveal it later — sealed until the moment.'],
+          ['💙', 'Conflict repair', 'A calm, five-step way through a disagreement.'],
+          ['✈️', 'Long-distance mode', 'Two clocks and a countdown to being together again.'],
+          ['🌷', 'Gratitude & streaks', 'Notice the good on purpose, and watch it add up.'],
+          ['❤️', 'Love language', 'Learn exactly how to love each other today.'],
+      ];
+      foreach ($loveFeatures as [$emoji, $title, $body]): ?>
+        <div class="card feature">
+          <span class="feature-icon"><?= $emoji ?></span>
+          <h3 style="font-size:1.05rem"><?= Str::e($title) ?></h3>
+          <p class="small"><?= Str::e($body) ?></p>
+        </div>
+      <?php endforeach; ?>
+    </div>
+
+    <div class="row mt-4">
+      <a class="btn btn-outline" href="/features">Explore every feature</a>
+    </div>
+  </div>
+</section>
+
 <section class="section">
   <div class="container">
     <h2>Everything a couple actually argues about, in one place</h2>
