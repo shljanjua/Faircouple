@@ -20,6 +20,14 @@ final class Storage
 
     private const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/heic'];
 
+    // Browser-recorded voice notes arrive as one of these, depending on the
+    // browser (Chrome webm, Safari mp4/m4a, Firefox ogg). finfo may report the
+    // container as video/* for webm/ogg, so both families are accepted.
+    private const AUDIO_TYPES = [
+        'audio/webm', 'video/webm', 'audio/ogg', 'application/ogg', 'video/ogg',
+        'audio/mpeg', 'audio/mp4', 'audio/x-m4a', 'audio/wav', 'audio/x-wav',
+    ];
+
     private const DOCUMENT_TYPES = [
         'application/pdf',
         'application/msword',
@@ -30,7 +38,7 @@ final class Storage
     public static function rules(string $bucket): array
     {
         return match ($bucket) {
-            'couple-media' => ['max' => 25 * 1048576, 'types' => [...self::IMAGE_TYPES, 'video/mp4', 'video/quicktime']],
+            'couple-media' => ['max' => 25 * 1048576, 'types' => [...self::IMAGE_TYPES, 'video/mp4', 'video/quicktime', ...self::AUDIO_TYPES]],
             'documents'    => ['max' => 25 * 1048576, 'types' => [...self::DOCUMENT_TYPES, ...self::IMAGE_TYPES]],
             'avatars'      => ['max' => 5 * 1048576,  'types' => self::IMAGE_TYPES],
             default        => ['max' => 8 * 1048576,  'types' => [...self::IMAGE_TYPES, 'image/svg+xml', 'image/x-icon']],
@@ -205,6 +213,11 @@ final class Storage
             'ico'  => 'image/x-icon',
             'mp4'  => 'video/mp4',
             'mov'  => 'video/quicktime',
+            'webm' => 'audio/webm',
+            'ogg', 'oga' => 'audio/ogg',
+            'mp3'  => 'audio/mpeg',
+            'm4a'  => 'audio/mp4',
+            'wav'  => 'audio/wav',
             'pdf'  => 'application/pdf',
             'doc'  => 'application/msword',
             'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

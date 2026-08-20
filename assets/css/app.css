@@ -889,3 +889,34 @@ details.accordion .accordion-body { padding: 0 1.1rem 1.1rem; color: hsl(var(--m
 .surprise-sealed { display:flex; gap:.9rem; align-items:center; }
 .surprise-lock { font-size:2rem; line-height:1; }
 .surprise-photo { width:100%; max-height:16rem; object-fit:cover; border-radius:.5rem; display:block; margin-top:.4rem; }
+
+/* ============================================================================
+   Soundtrack + Voice notes + Storybook
+   ========================================================================== */
+.song-row { display:flex; align-items:center; gap:.75rem; padding:.55rem 0; border-bottom:1px solid hsl(var(--border)); }
+.song-row:last-child { border-bottom:0; }
+.song-moment { font-size:1.4rem; width:1.8rem; text-align:center; }
+.song-body { flex:1; min-width:0; }
+.song-actions { display:flex; gap:.25rem; align-items:center; }
+
+.voice-recorder { display:flex; align-items:center; gap:.75rem; }
+.voice-timer { font-variant-numeric:tabular-nums; font-size:1.3rem; font-weight:700; color:hsl(var(--primary)); }
+.voice-audio { width:100%; max-width:22rem; margin:.35rem 0; height:2.4rem; }
+.voice-note { display:flex; align-items:center; gap:.8rem; padding:.6rem .2rem; border-bottom:1px solid hsl(var(--border)); }
+.voice-note:last-child { border-bottom:0; }
+.voice-note.is-new { background:hsl(var(--accent)); border-radius:.5rem; padding-left:.6rem; padding-right:.6rem; }
+.voice-note-icon { font-size:1.5rem; }
+.voice-note-body { flex:1; min-width:0; }
+
+.prompt-chips { display:flex; flex-wrap:wrap; gap:.5rem; }
+.prompt-chip { padding:.5rem .9rem; border:1px dashed hsl(var(--border)); border-radius:999px; background:hsl(var(--card));
+  text-decoration:none; color:inherit; font-size:.9rem; transition:.15s; }
+.prompt-chip:hover, .prompt-chip.is-active { border-style:solid; border-color:hsl(var(--primary)); background:hsl(var(--accent)); }
+
+.storybook { max-width:44rem; margin-inline:auto; }
+.chapter { margin-bottom:1.25rem; }
+.chapter-num { font-size:.75rem; letter-spacing:.08em; text-transform:uppercase; color:hsl(var(--primary)); margin:0; font-weight:700; }
+.chapter-title { font-family:var(--font-display); font-size:1.5rem; margin:.15rem 0; }
+.chapter-photo { width:100%; max-height:22rem; object-fit:cover; border-radius:.6rem; display:block; }
+.chapter-body { font-family:var(--font-display); font-size:1.05rem; line-height:1.8; }
+.chapter-body p { margin:0 0 .9rem; }
