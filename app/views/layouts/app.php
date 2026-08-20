@@ -60,6 +60,9 @@ $partner = $context['partner'] ?? null;
           <li><a href="/dashboard/date-night" class="<?= View::active('/dashboard/date-night') ?>"><?= View::icon('calendar') ?> Date night</a></li>
           <li><a href="/dashboard/repair" class="<?= View::active('/dashboard/repair') ?>"><?= View::icon('message') ?> Repair together</a></li>
           <li><a href="/dashboard/surprises" class="<?= View::active('/dashboard/surprises') ?>"><?= View::icon('gift') ?> Surprises</a></li>
+          <li><a href="/dashboard/soundtrack" class="<?= View::active('/dashboard/soundtrack') ?>"><?= View::icon('star') ?> Our soundtrack</a></li>
+          <li><a href="/dashboard/voice-notes" class="<?= View::active('/dashboard/voice-notes') ?>"><?= View::icon('message') ?> Voice notes</a></li>
+          <li><a href="/dashboard/storybook" class="<?= View::active('/dashboard/storybook') ?>"><?= View::icon('file-text') ?> Our storybook</a></li>
         </ul>
 
         <p class="side-heading">Relationship</p>
