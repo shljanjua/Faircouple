@@ -808,3 +808,48 @@ details.accordion .accordion-body { padding: 0 1.1rem 1.1rem; color: hsl(var(--m
 .milestone-count { font-family:var(--font-display); font-size:1.9rem; font-weight:800; line-height:1; }
 .milestone-label { font-size:.9rem; color:hsl(var(--muted-fg)); margin:.2rem 0 0; }
 .milestone-next { font-size:.78rem; color:hsl(var(--muted-fg)); margin:.45rem 0 0; }
+
+/* ============================================================================
+   Love language + Date night
+   ========================================================================== */
+.ll-today { background:linear-gradient(135deg, hsl(347 80% 96%), hsl(341 100% 97%)); border:1px solid hsl(var(--border)); }
+:root[data-theme="dark"] .ll-today { background:linear-gradient(135deg, hsl(347 38% 15%), hsl(330 30% 13%)); }
+.ll-today-eyebrow { font-size:.78rem; letter-spacing:.04em; text-transform:uppercase; color:hsl(var(--muted-fg)); margin:0; }
+.ll-today-lang { font-family:var(--font-display); font-size:1.5rem; font-weight:700; margin:.15rem 0 .4rem; }
+.ll-today-try { font-size:1rem; }
+
+.ll-slider { padding:.5rem 0; border-bottom:1px solid hsl(var(--border)); }
+.ll-slider:last-of-type { border-bottom:0; }
+.ll-slider label { display:flex; align-items:center; gap:.4rem; font-weight:600; }
+.ll-emoji { font-size:1.2rem; }
+.ll-val { margin-left:auto; min-width:1.4rem; text-align:center; font-variant-numeric:tabular-nums;
+  background:hsl(var(--accent)); color:hsl(var(--accent-fg)); border-radius:999px; padding:0 .5rem; font-size:.9rem; }
+.ll-range { width:100%; accent-color:hsl(var(--primary)); margin:.35rem 0 .2rem; }
+
+.ll-rank { display:flex; align-items:center; gap:.6rem; padding:.5rem 0; }
+.ll-rank-emoji { font-size:1.3rem; width:1.6rem; text-align:center; }
+.ll-rank-label { flex:0 0 9.5rem; font-size:.9rem; }
+.ll-rank-meter { flex:1; }
+.ll-rank.is-top .ll-rank-label { font-weight:700; }
+
+.mood-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(5rem,1fr)); gap:.5rem; }
+.mood-chip { position:relative; display:flex; flex-direction:column; align-items:center; gap:.2rem;
+  padding:.6rem .3rem; border:1px solid hsl(var(--border)); border-radius:var(--radius); cursor:pointer;
+  background:hsl(var(--card)); transition:.15s; text-align:center; }
+.mood-chip:hover { border-color:hsl(var(--primary)); transform:translateY(-1px); }
+.mood-chip input { position:absolute; opacity:0; }
+.mood-chip:has(input:checked) { border-color:hsl(var(--primary)); background:hsl(var(--accent)); box-shadow:0 0 0 2px hsl(var(--primary)/.25); }
+.mood-emoji { font-size:1.5rem; line-height:1; }
+.mood-label { font-size:.72rem; color:hsl(var(--muted-fg)); }
+
+.date-plan { list-style:none; counter-reset:step; padding:0; margin:0; }
+.date-plan li { counter-increment:step; display:flex; align-items:flex-start; gap:.6rem; padding:.55rem 0;
+  border-bottom:1px solid hsl(var(--border)); }
+.date-plan li:last-child { border-bottom:0; }
+.date-plan li::before { content:counter(step); flex:0 0 1.5rem; height:1.5rem; border-radius:50%;
+  background:hsl(var(--primary)); color:hsl(var(--primary-fg)); font-size:.8rem; font-weight:700;
+  display:inline-flex; align-items:center; justify-content:center; }
+.date-plan-emoji { font-size:1.15rem; }
+.date-plan-sm li { padding:.3rem 0; font-size:.9rem; }
+.date-plan-sm li::before { flex-basis:1.2rem; height:1.2rem; font-size:.7rem; }
+.date-saved.is-done { opacity:.7; }
