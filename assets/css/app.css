@@ -786,3 +786,25 @@ details.accordion .accordion-body { padding: 0 1.1rem 1.1rem; color: hsl(var(--m
 .challenge-day-body { display:flex; flex-direction:column; gap:.1rem; }
 .challenge-day-num { font-size:.72rem; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:hsl(var(--primary)); }
 .challenge-day-task { font-size:.95rem; }
+
+/* ============================================================================
+   Streaks & milestones
+   ========================================================================== */
+.streak-hero { text-align:center; padding:2rem 1.5rem;
+  background:linear-gradient(160deg, hsl(347 82% 96%), hsl(24 80% 96%));
+  border:1px solid hsl(var(--border)); }
+:root[data-theme="dark"] .streak-hero { background:linear-gradient(160deg, hsl(347 38% 15%), hsl(24 35% 13%)); }
+.streak-flame { font-size:2.6rem; line-height:1; }
+.streak-num { font-family:var(--font-display); font-size:4rem; font-weight:800; line-height:1;
+  color:hsl(var(--primary)); margin:.2rem 0 0; }
+.streak-label { font-size:1.1rem; font-weight:600; margin:.1rem 0 0; }
+.streak-since { font-size:.9rem; color:hsl(var(--muted-fg)); margin:.4rem 0 0; }
+.streak-today { font-size:.9rem; color:hsl(var(--success)); font-weight:600; margin:.6rem 0 0; }
+
+.milestone-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(13rem,1fr)); gap:1rem; }
+.milestone-card { padding:1.1rem 1.2rem; }
+.milestone-top { display:flex; align-items:center; justify-content:space-between; }
+.milestone-emoji { font-size:1.7rem; line-height:1; }
+.milestone-count { font-family:var(--font-display); font-size:1.9rem; font-weight:800; line-height:1; }
+.milestone-label { font-size:.9rem; color:hsl(var(--muted-fg)); margin:.2rem 0 0; }
+.milestone-next { font-size:.78rem; color:hsl(var(--muted-fg)); margin:.45rem 0 0; }
