@@ -73,6 +73,32 @@ final class Plans
         ];
     }
 
+    /**
+     * Full, unlimited access — every numeric limit unlimited and every feature on.
+     * Used to give a superadmin lifetime-tier access without a billing row. Falls
+     * back to the real Lifetime plan's identity when it is published.
+     */
+    public static function fullEntitlements(): array
+    {
+        $limits = [];
+        foreach (self::FREE_LIMITS as $key => $value) {
+            $limits[$key] = is_bool($value) ? true : -1;
+        }
+
+        $plan = Db::one('SELECT slug, name, tier FROM plans WHERE is_active = 1 ORDER BY tier DESC LIMIT 1');
+
+        return [
+            'plan' => [
+                'slug' => $plan['slug'] ?? 'lifetime',
+                'name' => $plan['name'] ?? 'Lifetime',
+                'tier' => (int) ($plan['tier'] ?? 3),
+            ],
+            'limits'       => $limits,
+            'subscription' => null,
+            'is_paid'      => true,
+        ];
+    }
+
     /** -1 means unlimited. Booleans are simple on/off features. */
     public static function reached(array $limits, string $key, int $current): bool
     {

@@ -8,7 +8,7 @@
 
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/favicon.svg">
-<link rel="stylesheet" href="/assets/css/app.css?v=7">
+<link rel="stylesheet" href="/assets/css/app.css?v=8">
 <link rel="alternate" type="application/rss+xml" title="FairCouples blog" href="/blog">
 <link rel="sitemap" type="application/xml" href="/sitemap.xml">
 

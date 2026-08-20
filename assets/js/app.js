@@ -40,12 +40,61 @@
 
   applyTheme(currentTheme());
 
+  /* ------------------------------------------------- Off-canvas sidebar */
+
+  var sidebar = document.getElementById('app-sidebar');
+  var backdrop = null;
+
+  function sidebarTriggers() {
+    return document.querySelectorAll('[data-toggle="app-sidebar"]');
+  }
+
+  function openSidebar() {
+    if (!sidebar) return;
+    sidebar.classList.add('is-open');
+    document.body.classList.add('sidebar-open');
+    if (!backdrop) {
+      backdrop = document.createElement('div');
+      backdrop.className = 'sidebar-backdrop';
+      backdrop.addEventListener('click', closeSidebar);
+      document.body.appendChild(backdrop);
+    }
+    // Force a reflow so the fade-in transition runs from the start.
+    void backdrop.offsetWidth;
+    backdrop.classList.add('is-visible');
+    sidebarTriggers().forEach(function (t) { t.setAttribute('aria-expanded', 'true'); });
+  }
+
+  function closeSidebar() {
+    if (!sidebar) return;
+    sidebar.classList.remove('is-open');
+    document.body.classList.remove('sidebar-open');
+    if (backdrop) backdrop.classList.remove('is-visible');
+    sidebarTriggers().forEach(function (t) { t.setAttribute('aria-expanded', 'false'); });
+  }
+
+  // Tapping any real navigation link inside the sidebar closes it, so the
+  // panel never lingers over the page you just opened. Links that only submit
+  // forms or toggle the panel itself are left alone.
+  if (sidebar) {
+    sidebar.addEventListener('click', function (event) {
+      var link = event.target.closest('a[href]');
+      if (link && !link.hasAttribute('data-toggle')) closeSidebar();
+    });
+  }
+
   /* --------------------------------------------------------- Menu toggles */
 
   document.addEventListener('click', function (event) {
     var trigger = event.target.closest('[data-toggle]');
     if (trigger) {
-      var target = document.getElementById(trigger.getAttribute('data-toggle'));
+      var name = trigger.getAttribute('data-toggle');
+      if (name === 'app-sidebar') {
+        event.preventDefault();
+        if (sidebar && sidebar.classList.contains('is-open')) { closeSidebar(); } else { openSidebar(); }
+        return;
+      }
+      var target = document.getElementById(name);
       if (target) {
         var open = target.classList.toggle('is-open');
         if (target.hasAttribute('hidden') || target.classList.contains('dropdown-menu')) {
@@ -69,9 +118,10 @@
 
   document.addEventListener('keydown', function (event) {
     if (event.key !== 'Escape') return;
-    document.querySelectorAll('.is-open').forEach(function (element) {
+    if (sidebar && sidebar.classList.contains('is-open')) closeSidebar();
+    document.querySelectorAll('.dropdown-menu.is-open').forEach(function (element) {
       element.classList.remove('is-open');
-      if (element.classList.contains('dropdown-menu')) element.hidden = true;
+      element.hidden = true;
     });
   });
 

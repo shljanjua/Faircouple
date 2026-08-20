@@ -13,6 +13,6 @@
   </main>
 
   <?php View::partial('partials/site-footer'); ?>
-  <script src="/assets/js/app.js?v=1" defer></script>
+  <script src="/assets/js/app.js?v=2" defer></script>
 </body>
 </html>
