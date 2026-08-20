@@ -56,6 +56,8 @@ $partner = $context['partner'] ?? null;
           <li><a href="/dashboard/distance" class="<?= View::active('/dashboard/distance') ?>"><?= View::icon('plane') ?> Long-distance</a></li>
           <li><a href="/dashboard/challenges" class="<?= View::active('/dashboard/challenges') ?>"><?= View::icon('check') ?> Challenges</a></li>
           <li><a href="/dashboard/streaks" class="<?= View::active('/dashboard/streaks') ?>"><?= View::icon('star') ?> Streaks &amp; milestones</a></li>
+          <li><a href="/dashboard/love-language" class="<?= View::active('/dashboard/love-language') ?>"><?= View::icon('heart') ?> Love language</a></li>
+          <li><a href="/dashboard/date-night" class="<?= View::active('/dashboard/date-night') ?>"><?= View::icon('calendar') ?> Date night</a></li>
         </ul>
 
         <p class="side-heading">Relationship</p>
