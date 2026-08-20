@@ -119,10 +119,14 @@ View::begin('layouts/public', [
               <?php endif; ?>
             </p>
 
-            <p class="small mt-2"><?= Str::e($plan['tagline']) ?></p>
+            <p class="small mt-2 bold"><?= Str::e($plan['tagline']) ?></p>
+            <?php if (!empty($plan['description'])): ?>
+              <p class="tiny muted mt-1"><?= Str::e($plan['description']) ?></p>
+            <?php endif; ?>
 
+            <p class="price-list-head"><?= $isFree ? "What you get, free" : "What's included" ?></p>
             <ul class="price-list">
-              <?php foreach (array_slice($plan['features'], 0, 10) as $feature): ?>
+              <?php foreach ($plan['features'] as $feature): ?>
                 <li><?= Str::e($feature) ?></li>
               <?php endforeach; ?>
             </ul>

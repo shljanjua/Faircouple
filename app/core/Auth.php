@@ -560,6 +560,12 @@ final class Auth
             return self::$entitlements = $free;
         }
 
+        // Superadmins run the whole product, so they always hold full lifetime
+        // access — no billing row required.
+        if ($user['role'] === 'superadmin') {
+            return self::$entitlements = Plans::fullEntitlements();
+        }
+
         $userIds = [$user['id']];
         $context = self::couple();
         if ($context) {
