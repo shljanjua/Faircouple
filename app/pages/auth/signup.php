@@ -191,6 +191,8 @@ View::begin('layouts/auth', [
     <?php endif; ?>
   </form>
 
+  <?php View::partial('partials/google-button', ['label' => 'Sign up with Google']); ?>
+
   <p class="center small muted mt-3">
     Already have an account? <a href="/signin">Sign in</a>
   </p>

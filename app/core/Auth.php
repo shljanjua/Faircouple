@@ -274,6 +274,111 @@ final class Auth
         return ['ok' => true, 'verify' => false];
     }
 
+    /**
+     * Sign in — or create — an account from a verified Google profile.
+     *
+     * Google has already confirmed the email, so a matching account is linked
+     * and signed straight in, and a brand-new one skips email verification.
+     * Passwordless: the login row is created with no password hash, and the
+     * person can set one later from Settings if they ever want to.
+     *
+     * @param array $g A profile from GoogleAuth::userInfo()['profile'].
+     * @return array{ok:bool,error?:string,new?:bool}
+     */
+    public static function signInWithGoogle(array $g): array
+    {
+        $email = strtolower(trim((string) ($g['email'] ?? '')));
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return ['ok' => false, 'error' => 'Google did not share a usable email address.'];
+        }
+
+        $existing = Db::one(
+            'SELECT u.id, u.disabled_at, p.status
+               FROM users u JOIN profiles p ON p.id = u.id
+              WHERE u.email = ? AND p.deleted_at IS NULL
+              LIMIT 1',
+            [$email]
+        );
+
+        // ---- Existing account: link and sign in ----------------------------
+        if ($existing) {
+            if ($existing['disabled_at'] !== null || in_array($existing['status'], ['suspended', 'banned'], true)) {
+                return ['ok' => false, 'error' => 'This account is not available. Please contact support.'];
+            }
+
+            Db::run('UPDATE users SET email_verified_at = COALESCE(email_verified_at, UTC_TIMESTAMP()) WHERE id = ?', [$existing['id']]);
+            Db::run(
+                'UPDATE profiles
+                    SET email_verified_at = COALESCE(email_verified_at, UTC_TIMESTAMP()),
+                        avatar_url = COALESCE(NULLIF(avatar_url, ""), ?),
+                        last_seen_at = UTC_TIMESTAMP(), last_login_ip = ?, login_count = login_count + 1
+                  WHERE id = ?',
+                [$g['picture'] ?? null, Request::ip(), $existing['id']]
+            );
+
+            self::issueSession($existing['id']);
+            Audit::record('auth.google.signin', 'user', $existing['id'], 'Signed in with Google', [], $existing['id'], $email);
+            return ['ok' => true, 'new' => false];
+        }
+
+        // ---- New account: register -----------------------------------------
+        if (!Settings::bool('signup_enabled', true)) {
+            return ['ok' => false, 'error' => 'New signups are paused right now.'];
+        }
+
+        $name    = trim((string) ($g['name'] ?? '')) ?: (explode('@', $email)[0]);
+        $first   = trim((string) ($g['given_name'] ?? '')) ?: explode(' ', $name)[0];
+        $country = strtoupper((string) (Request::header('CF-IPCountry') ?? 'US'));
+        $country = preg_match('/^[A-Z]{2}$/', $country) ? $country : 'US';
+        $userId  = Str::uuid();
+
+        Db::begin();
+        $created = Db::run(
+            'INSERT INTO users (id, email, password_hash, email_verified_at) VALUES (?, ?, NULL, UTC_TIMESTAMP())',
+            [$userId, $email]
+        );
+        if (!$created['ok']) {
+            Db::rollback();
+            return ['ok' => false, 'error' => $created['error'] ?? 'Could not create your account.'];
+        }
+
+        $profile = Db::run(
+            'INSERT INTO profiles
+               (id, email, full_name, display_name, avatar_url, currency, country_code, locale, timezone,
+                marketing_opt_in, referral_code, email_verified_at, onboarded_at, notification_prefs)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, UTC_TIMESTAMP(), NULL, ?)',
+            [
+                $userId,
+                $email,
+                $name,
+                $first,
+                ($g['picture'] ?? '') !== '' ? $g['picture'] : null,
+                Currency::forCountry($country),
+                $country,
+                'en',
+                'UTC',
+                0,
+                strtoupper(bin2hex(random_bytes(5))),
+                json_encode(['email' => true, 'push' => true, 'weekly_report' => true, 'partner_activity' => true]),
+            ]
+        );
+        if (!$profile['ok']) {
+            Db::rollback();
+            return ['ok' => false, 'error' => $profile['error'] ?? 'Could not create your profile.'];
+        }
+        Db::commit();
+
+        Audit::record('auth.google.signup', 'user', $userId, 'New account via Google', [], $userId, $email);
+
+        self::issueSession($userId);
+        Mailer::template('welcome', $email, [
+            'name'        => $name,
+            'confirm_url' => Config::siteUrl('/dashboard'),
+        ], $userId);
+
+        return ['ok' => true, 'new' => true];
+    }
+
     public static function signOut(): void
     {
         $sid = $_SESSION['sid'] ?? null;
