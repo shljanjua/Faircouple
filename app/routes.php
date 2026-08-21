@@ -38,6 +38,8 @@ $router->get('/health',                 'system/health');
 $router->any('/signup',                 'auth/signup');
 $router->any('/signin',                 'auth/signin');
 $router->any('/signout',                'auth/signout');
+$router->get('/auth/google',            'auth/google');
+$router->get('/auth/google/callback',   'auth/google-callback');
 $router->any('/forgot-password',        'auth/forgot-password');
 $router->any('/reset-password',         'auth/reset-password');
 $router->any('/verify-email',           'auth/verify-email');

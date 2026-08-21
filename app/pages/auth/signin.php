@@ -60,6 +60,8 @@ View::begin('layouts/auth', [
   <button class="btn btn-lg btn-block mt-2" type="submit">Sign in</button>
 </form>
 
+<?php View::partial('partials/google-button', ['label' => 'Sign in with Google']); ?>
+
 <p class="center small muted mt-3">
   New to <?= Str::e(Settings::text('site_name', 'FairCouples')) ?>?
   <a href="/signup">Create a free account</a>

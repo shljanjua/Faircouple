@@ -1790,6 +1790,9 @@ INSERT INTO site_settings (setting_key, value, group_name, label, description, i
   ('signup_enabled','true','general','Allow new signups',NULL,true,false),
   ('require_email_verification','true','general','Require email verification','New accounts must confirm their email before using the app.',true,false),
   ('trial_days','14','general','Default trial length (days)',NULL,true,false),
+  ('google_auth_enabled','false','general','Enable Google sign-in','Show the "Continue with Google" button on sign-up and sign-in.',false,false),
+  ('google_client_id','""','general','Google OAuth Client ID',NULL,false,false),
+  ('google_client_secret','""','general','Google OAuth Client secret',NULL,false,true),
 
   ('social_twitter','"https://x.com/faircouples"','social','X / Twitter',NULL,true,false),
   ('social_instagram','"https://instagram.com/faircouples"','social','Instagram',NULL,true,false),

@@ -228,6 +228,20 @@ code {
 .btn-outline:hover { background: hsl(var(--secondary)); filter: none; }
 .btn-ghost { background: transparent; color: hsl(var(--muted-fg)); }
 .btn-ghost:hover { background: hsl(var(--secondary)); color: hsl(var(--foreground)); filter: none; }
+
+/* "Continue with Google" — white pill with the Google wordmark colours. */
+.btn-google {
+  background: #fff; color: #1f1f1f; border: 1px solid hsl(var(--border));
+  gap: 0.6rem; font-weight: 600;
+}
+.btn-google:hover { background: #f7f8f9; filter: none; box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,.08)); }
+.btn-google .google-mark { flex: none; }
+:root[data-theme="dark"] .btn-google { background: #fff; color: #1f1f1f; }
+
+/* "or" separator between the form and the social button. */
+.auth-divider { display: flex; align-items: center; gap: 0.75rem; margin: 1.25rem 0; color: hsl(var(--muted-fg)); }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; height: 1px; background: hsl(var(--border)); }
+.auth-divider span { font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.06em; }
 .btn-danger { background: hsl(var(--danger)); }
 .btn-sm { height: 2.1rem; padding-inline: 0.8rem; font-size: 0.83rem; }
 .btn-lg { height: 3.1rem; padding-inline: 1.75rem; font-size: 1rem; }

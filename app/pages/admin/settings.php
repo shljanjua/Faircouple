@@ -77,6 +77,19 @@ if (Request::isPost()) {
             ];
             break;
 
+        case 'social':
+            $values = [
+                'google_auth_enabled' => Request::bool('google_auth_enabled'),
+                'google_client_id'    => trim(Request::input('google_client_id')),
+            ];
+
+            // The secret is write-only: a blank field keeps the stored value.
+            $secret = trim(Request::input('google_client_secret'));
+            if ($secret !== '') {
+                $values['google_client_secret'] = $secret;
+            }
+            break;
+
         case 'analytics':
             $values = [
                 'analytics_ga4_id'              => trim(Request::input('analytics_ga4_id')),
@@ -134,6 +147,7 @@ $tabs = [
     'brand'     => 'Brand &amp; contact',
     'money'     => 'Currency &amp; billing',
     'accounts'  => 'Accounts',
+    'social'    => 'Social login',
     'analytics' => 'Analytics &amp; ads',
     'features'  => 'Features &amp; maintenance',
     'security'  => 'Security',
@@ -358,6 +372,86 @@ View::begin('layouts/admin', ['title' => 'Settings', 'no_index' => true]);
       </div>
 
       <button class="btn btn-lg mt-3" type="submit">Save account settings</button>
+    </div>
+  </form>
+<?php endif; ?>
+
+<?php /* ------------------------------------------------------ Social login */ ?>
+<?php if ($tab === 'social'): ?>
+  <?php $secretSet = Settings::text('google_client_secret') !== ''; ?>
+  <form method="post" class="card">
+    <?= Csrf::field() ?>
+    <input type="hidden" name="section" value="social">
+    <div class="card-head"><h2>Sign in with Google</h2></div>
+    <div class="card-body">
+      <p class="small muted">
+        Adds a “Continue with Google” button to the sign-up and sign-in pages so people can
+        register in one tap. New Google accounts are created verified, with no password.
+      </p>
+
+      <div class="alert alert-info mt-3">
+        <div>
+          <p class="bold small">Set it up in three steps</p>
+          <ol class="small" style="margin:0.4rem 0 0 1.1rem;padding:0">
+            <li>Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud → Credentials</a> and create an <strong>OAuth client ID</strong> of type <strong>Web application</strong>.</li>
+            <li>Under <strong>Authorized redirect URIs</strong>, add the exact URL below.</li>
+            <li>Paste the Client ID and Client secret here, tick “Enable”, and save.</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="field mt-3">
+        <label>Authorized redirect URI <span class="hint">— paste this into Google exactly</span></label>
+        <div class="row" style="gap:0.5rem;align-items:center">
+          <input class="input mono" readonly value="<?= Str::e(GoogleAuth::redirectUri()) ?>"
+                 onclick="this.select()" style="flex:1">
+          <button type="button" class="btn btn-sm btn-outline"
+                  data-copy="<?= Str::e(GoogleAuth::redirectUri()) ?>">Copy</button>
+        </div>
+        <span class="hint">Also add your homepage under “Authorized JavaScript origins”.</span>
+      </div>
+
+      <hr class="divider">
+
+      <div class="field">
+        <label for="google_client_id">Client ID</label>
+        <input class="input mono" id="google_client_id" name="google_client_id"
+               placeholder="000000000000-xxxxxxxx.apps.googleusercontent.com"
+               value="<?= Str::e(Settings::text('google_client_id')) ?>">
+      </div>
+
+      <div class="field">
+        <label for="google_client_secret">
+          Client secret
+          <?php if ($secretSet): ?><span class="badge badge-success">saved</span><?php endif; ?>
+        </label>
+        <input class="input mono" type="password" id="google_client_secret" name="google_client_secret"
+               autocomplete="new-password"
+               placeholder="<?= $secretSet ? 'Leave blank to keep the saved secret' : 'Paste the client secret' ?>">
+        <span class="hint">Stored write-only — the panel can tell you it is set, never show it back.</span>
+      </div>
+
+      <label class="checkbox mt-3">
+        <input type="checkbox" name="google_auth_enabled" value="1"
+               <?= Settings::bool('google_auth_enabled') ? 'checked' : '' ?>>
+        <span>
+          Enable “Continue with Google”
+          <span class="hint">The button only appears once this is on and both the Client ID and secret are saved.</span>
+        </span>
+      </label>
+
+      <p class="small mt-3">
+        Status:
+        <?php if (GoogleAuth::enabled()): ?>
+          <span class="badge badge-success">Live</span> visitors can sign in with Google now.
+        <?php elseif (GoogleAuth::configured()): ?>
+          <span class="badge badge-warning">Ready</span> credentials saved — tick “Enable” to switch it on.
+        <?php else: ?>
+          <span class="badge">Off</span> add the Client ID and secret to get started.
+        <?php endif; ?>
+      </p>
+
+      <button class="btn btn-lg mt-3" type="submit">Save Google settings</button>
     </div>
   </form>
 <?php endif; ?>
